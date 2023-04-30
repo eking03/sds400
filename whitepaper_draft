@@ -1,0 +1,30 @@
+INTRO
+- ask Ben if I should have more data viz in the introduction, as way to quanitfy the need assessment for this kind of work at Smith
+  * I wonder if there's any data available describing the number of students (1) requesting leave-of-absence in fall vs spring, (2) making appointments with the Schacht Wellness Center
+- suggested SAD treatments stress the significance in *early morning* light (before 8am; dawn simulation), afternoon light is too late to positively influence circadian rhythm (and may exacerbate insomnia)
+- SAD statistics according to several medical publications/associations: 
+  * 'women' are 4 times as likely to develop SAD than 'men'
+  * frequency of observed SAD cases increase with latitude (follow-up on the development of SAD in people who move north)
+  * onset most frequently occurs in young adults (18-30)
+  * "Among patients who were recruited for randomized trials studying treatment of winter depression, nearly 60 percent had never been treated for depression" (so we're not talking a subset of students that is educated about their own mental health and could proactively self-advocate for help, we also have to include people who may not even know what's happening to them)
+  * most severe system occur in Jan and Feb (researchers believe it's because of acculmulated effects; while the onset of SAD occurs around October, symptoms are mild) (but also note, seasonal mood is not just depedenct on the length of the photoperiod, but the availability of morning light which regulates circadian cycles and seratonin+melatonin production; sunrise occurs later in the day even after the winter solstice) 
+
+- SAD at Smith: 
+  * 70% of students come from a latitude south of here (ie. less significant reduction in winter daylight) 
+  * Smith used to offer sunlight therapy at the Schacht center and it's being considered for reinstatement: "Daily light therapy can improve mood for 60% to 80% of people with SAD." (but experts reccommend 30 min of *daily* exposure, *before 8am*, from fall until spring - (1) Schacht doesn't open till 9 and is closed on weekends, (2) most people start experiencing improvement after 1 week of use but that's with consistent treatment, (3) for a personal, in-dorm sunlamp, I'm pretty sure accomodations are required for that kind of equipment/appliance, and even then, those things cost upwards $200, (4) the reason why experts don't advice using cheap sunlamps is because to experience the benefit from them, they have to close to a full-spectrum (including UV), which requires high quality optics, and even then, they still say that nothing replaces natural sunlight, (5) “Light therapy is not appropriate for those with conditions such as diabetes or people with retinal damage because it could make those conditions worse.”)
+
+METHODS
+- ask Ben how to interpret the metadata, especially the spatial referencing - it mentions several different projections and units, and I was mostly wondering if the metadata was organised based on the chronology of the data processing (ie. current projection status at the end?)
+- from DEM's metadata-for-humans: "Ground Conditions: Lidar was partially collected in spring of 2015 and completed in winter 2015, while no snow was on the ground and rivers were at or below normal levels." "LiDAR data was acquired from April 16, 2015 to December 5, 2015." (shouldn't be significant leaf-drop by Dec 5th)
+- excersing restraint in not comparing the point-cloud gridding interpolation results from whitebox vs lidR vs terra vs NOAA's DSM product
+- should I switch from using Campus_Building_Footprints from SAL to building footprints from OSMdata? (since the point of the capstone is to work with open source data)
+- Limitations: (1) analysis exlcudes the number of windows per room; (2) sky view factor is used instead of vertical sky component; (3) [daylight_factor = sky_component + internally_reflected_component + externally_reflected_component] IRC data unavailable (since opting out of interior BIM daylight modeling); (4) based off of terrain data from 2015, which might be out-dated due to building construction projects, like Neilson
+- didn't include overcast-sky estimations
+- lidar data sourced from NOAA; DEM and DSM constructed from lidar point-cloud using TIN interpolation method from whitebox package; ray-traced shadows and ambient occlusion (sky view factor) calculated using the rayshader; shadow information interpreted and quantified using raster analysis functions from the terra (and raster) packages; methodology for extracting shadow estimations using lidar developed by Tyler Morgan-Wall (rayshader), whose procedure is available to the public on his github
+
+RESULTS
+- have a data viz of light conditions in the Quad, but no estimations for ranking the relative lighting conditions of individual rooms, groups of rooms in a dorm that share a window orientation
+
+DISCUSSION
+- necessary to reproduce this for all houses; there's a tendency to consolidate all disability issues and have a blanket solution, which might mean placing all students with accessibility needs in one house, but seasonal depression is a multilayered issue and though light quality is a significant portion of that, so is differential social behaviors that accomany the winter months (isolation), mobility (accomodate diff. preferences to encourage 'excercise': near gym, far from class to benefit from daily commute, near class to encourage schedule maintenance)
+- logistical follow-up of this project would be to inform students of new housing accomodation options
