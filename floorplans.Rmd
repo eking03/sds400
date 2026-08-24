@@ -1,0 +1,1703 @@
+---
+title: "floorplans"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#library(devtools)
+library(pdftools)
+library(tidyverse)
+library(ggplot2)
+library(raster)
+library(sf)
+library(terra)
+library(viridis)
+library(RColorBrewer)
+library(suncalc)
+library(lidR)
+library(rayshader)
+library(pracma)
+library(wk)
+#library(ggiraph)
+library(patchwork)
+```
+
+## Retrieving + Formatting Data
+
+```{r}
+
+campus_footprints <- st_read("C:/Users/jaria/Documents/R/Capstone-410/sds400/Campus_Building_Footprints_2020/campus_blgs_2020.shp") %>%
+  st_transform(8748)
+
+```
+
+```
+
+las.dir <- "C:/Users/jaria/Downloads/2015_ME_MA_lidar_Job847219/"
+file.names <- list.files(path = las.dir, pattern = "Job847219_42072_*", full.names = TRUE)
+
+las7 <- lidR::readLAScatalog(file.names[7], progress = FALSE, filter = "-drop_z_below 0 -drop_z_above 350")
+lasQuad <- lidR::clip_rectangle(las7, 346242.477, 2943359.757, 347338.812, 2944438.415)
+
+# lascamp <- lidR::clip_rectangle(las7, shoe[1], shoe[2], shoe[3], shoe[4])
+# las6 <- lidR::readLAScatalog(file.names[6], progress = FALSE, filter = "-drop_z_below 0 -drop_z_above 350")
+# lascampB <- lidR::clip_rectangle(las6, shoe[1], shoe[2], shoe[3], shoe[4])
+
+```
+
+```
+
+roofQuad <- campus_footprints %>%
+  filter(OBJECTID == 116 | OBJECTID == 131 | OBJECTID == 141 | OBJECTID == 148 )
+roofQuad <- st_transform(roofQuad, st_crs(lasQuad))
+
+```
+
+```{r}
+
+pdf.dir <- "C:/Users/jaria/Downloads/residential_floor_plans/"
+pdf.files <- list.files(path = pdf.dir, full.names = TRUE)
+
+
+a <- list.files(path = pdf.dir, full.names = FALSE)
+aa <- as.data.frame(a)
+aa <- aa %>% dplyr::select("pdf_name" = a)
+aa <- aa %>% mutate(V1 = stringr::str_split(pdf_name, boundary("word"), simplify = T)[,1])
+aa <- aa %>% mutate(V2 = stringr::str_split(pdf_name, boundary("word"), simplify = T)[,2])
+aa <- aa %>% mutate(V = paste(V1, V2))
+
+```
+
+```{r}
+
+footID <- c(56, 57, 63, 64, 65, 67, 72, 80, 81, 83, 85, 87, 90, 94, 96, 99, 101, 103, 104, 110, 113, 116, 120, 122, 123, 124, 127, 128, 129, 130, 131, 133, 137, 141, 144, 148, 155, 156) 
+
+feet <- campus_footprints %>% filter(OBJECTID %in% footID)
+feet <- st_transform(feet, st_crs(las7)) %>% st_zm()
+shoe <- st_bbox(feet)
+
+```
+
+
+
+## Vectorizing Floorplan PDFs (and other functions)
+
+```{r}
+
+blueprints <- function (n, pg=1, rm.detail=TRUE) {
+  
+  dorm <- pdf_convert(pdf.files[n], format = "tiff", pages = pg, verbose = FALSE)
+  dorm <- raster::stack(dorm)
+  dorm <- raster(dorm, layer = 1)
+  
+  if (n %in% c(2, 6, 15, 17, 38)) {
+    dorm[dorm[] > 220] = NA
+  } else {dorm[dorm[] == 255] = NA}
+  
+  dorm[!is.na(dorm[])] = 1
+  
+  
+  dorm <- dorm %>% 
+    terra::rast() %>%
+    terra::as.polygons(dorm) %>%
+    sf::st_as_sf() %>%
+    sf::st_cast("POLYGON") %>% 
+    mutate(size = st_area(geometry)) 
+  
+  
+  if (n %in% c(1, 2, 3, 14, 18, 20, 23, 28, 36)) {
+    rm.size = 5e3
+  } else {rm.size = 2e4}
+  
+  
+  if (rm.detail == TRUE) {
+    
+    dorm <- dorm %>%
+      filter(size > rm.size)
+    
+  } else {dorm <- dorm}
+ 
+}
+
+```
+
+```{r}
+
+preview <- function (n, pg=1, rm.detail=TRUE) {
+  
+  ggplot() +
+    geom_sf(data = blueprints(n, pg, rm.detail), 
+            fill = "thistle", color = "mediumpurple4") +
+    coord_sf() +
+    theme_minimal() +
+    labs(title = aa[n,4])
+  
+  }
+
+```
+
+```{r}
+
+outline <- function(dorm) {
+
+    st_cast(dorm, "LINESTRING") %>%
+    st_cast("POLYGON") %>%
+    mutate(size = sf::st_area(geometry)) %>% 
+    slice_max(size, n=1)
+
+  }
+
+```
+
+```{r}
+id.nodes <- function(dorm, n = 1:nrow(dorm.pts), dark.halo = FALSE) {
+  
+  dorm.outline <- dorm
+  
+  dorm.pts <- st_cast(dorm.outline, "POINT")
+  dorm.pts$size <- 1:nrow(dorm.pts)
+  
+  pt.sz <- 2.5
+  
+  if (n != 1:nrow(dorm.pts)) {
+    pt.sz <- 1
+    halo <- "white"
+  } else { halo <- "gray30" }
+  
+  if (dark.halo) {halo <- "gray30"}
+  
+  ggplot() +
+    geom_sf(data = dorm.outline, fill = "honeydew2", alpha = 0.5) +
+    geom_sf(data = dorm.pts, color = "honeydew4", size = pt.sz) +
+    geom_sf(data = dorm.pts[n,], color = halo, size = 2.5) +
+    geom_sf(data = dorm.pts[n,], aes(color = size), size = 2) +
+    scale_color_distiller(palette = "PRGn") +
+    coord_sf() +
+    theme_minimal()
+  
+  }
+```
+
+```{r, warning=FALSE}
+
+getAB <- function(outline, n) {
+  
+  pt <- st_coordinates(outline)[n,1:2]
+  st_point(c(pt[1], pt[2]))
+  
+}
+```
+
+```{r}
+
+distAB <- function(a, b, ruler.axis = "")  {
+  
+  if (ruler.axis == "h.dist") {d = a[1]-b[1]} 
+  else if (ruler.axis == "v.dist") {d = a[2]-b[2]} 
+  else {d = st_distance(a,b)}
+  
+  abs(d)
+  
+}
+
+```
+
+```{r}
+
+match.scale <- function(dorm1, a1, b1, r1="", dorm2, a2, b2, r2="") {
+  
+  a1 <- getAB(dorm1, a1)
+  b1 <- getAB(dorm1, b1)
+
+  a2 <- getAB(dorm2, a2)
+  b2 <- getAB(dorm2, b2)
+  
+  f1 <- distAB(a1, b1, ruler.axis=r1)
+  f2 <- distAB(a2, b2, ruler.axis=r2)
+  
+  f <- f2 / f1
+  wk_transform(dorm1, wk_affine_scale(scale_x = f, scale_y = f))
+  
+}
+
+```
+
+```{r}
+
+match.position <- function(dorm1, n1, dorm2, n2) {
+  
+  pt1 <- getAB(dorm1, n1)
+  pt2 <- getAB(dorm2, n2)
+  
+  wk_transform(dorm1, wk_affine_translate(dx = pt2[1]-pt1[1],
+                                          dy = pt2[2]-pt1[2]))
+  
+}
+
+```
+
+```{r}
+
+dorm.pdf <- function (n, pg=1) {
+  
+  dorm <- pdf_convert(pdf.files[n], format = "tiff", pages = pg, verbose = FALSE)
+  dorm <- raster::stack(dorm)
+  dorm <- raster(dorm, layer = 1)
+  
+  dorm[dorm[] == 255] = NA
+  dorm[!is.na(dorm[])] = 1
+  
+  dorm <- dorm %>% 
+    terra::rast()
+  
+  dorm
+  
+  }
+```
+
+```{r}
+
+lock.ratio <- function(dorm.stencil) {
+  
+  dorm.wk <- wk_transform(dorm.stencil, wk_affine_translate(dx = 0, dy = 0))
+  bb <- st_bbox(dorm.wk)
+  
+  d <- diag(c(bb[3]-bb[1], bb[4]-bb[2]))
+  d <- d[1,1] - d[2,2]
+  
+  x <- 0
+  y <- 0
+  
+  if (d < 0) {x <- abs(d)} else {y <- d}
+
+  pt <- st_point(c(bb[3],bb[4]))
+  pt <- wk_transform(pt, wk_affine_translate(dx = x, dy = y))
+  pt <- st_as_sfc(pt)
+
+  dorm.sq <- st_geometrycollection(c(dorm.wk, pt))
+  dorm.sq <- st_normalize(dorm.sq)
+  dorm.sq <- st_collection_extract(st_geometry(dorm.sq), "POLYGON")
+  
+}
+
+```
+
+```{r}
+
+match.center <- function(blueprint, footprint) {
+  
+  b.cntr <- blueprint %>%
+    st_centroid() %>%
+    st_coordinates()
+  
+  f.cntr <- footprint %>%
+    st_centroid() %>%
+    st_coordinates()
+  
+  wk_transform(blueprint, wk_affine_translate(dx = f.cntr[1]-b.cntr[1],
+                                              dy = f.cntr[2]-b.cntr[2]))
+  
+}
+
+```
+
+
+
+
+
+## Practice (Jordan, Lvl.1+2)
+
+```{r, message=FALSE, warning=FALSE}
+
+jpath <- pdf.files[21]
+
+j1 <- pdf_convert(jpath, format = "tiff", pages = 1, verbose = FALSE)
+j1 <- raster::stack(j1)
+j1 <- raster(j1, layer = 1)
+j1[j1[] == 255] = NA
+j1[!is.na(j1[])] = 1
+j1 <- rast(j1)
+
+
+j1_vect <- terra::as.polygons(j1) %>%
+  sf::st_as_sf() %>%
+  sf::st_cast("POLYGON")
+
+j1_geo <- j1_vect %>% mutate(size = st_area(geometry))
+# hist(j1_geo$size)
+
+j1_blank <- j1_geo %>% filter(size > 2e4)
+
+ggplot() +
+  geom_sf(data = j1_blank, fill = "thistle", color = "mediumpurple4") +
+  # geom_sf(data = st_buffer(j1_blank, dist = 10), color = "blue") +
+  # geom_sf(data = st_boundary(st_buffer(j1_blank)), color = "red") +
+  coord_sf() +
+  theme_minimal()
+
+```
+
+
+
+## Cushing + Emerson + Jordan
+
+```{r, message=FALSE, warning=FALSE}
+
+cushing <- blueprints(10)
+emerson <- blueprints(13)
+jordan <- blueprints(21)
+
+jordan <- wk_transform(jordan, wk_affine_rotate(-90))
+cushing <- wk_transform(cushing, wk_affine_rotate(90))
+
+jordan <- wk_transform(jordan, wk_affine_scale(scale_x = 0.67, scale_y = 0.67)) #0.650043
+
+cushing <- wk_transform(cushing, wk_affine_translate(dx = 255, dy = 355))
+jordan <- wk_transform(jordan, wk_affine_translate(dx = 940, dy = 1162))
+
+duplex <- st_union(emerson, cushing)
+duplex <- st_union(duplex, jordan)
+duplex <- duplex$geometry
+
+
+ggplot() +
+  # geom_sf(data = st_boundary(st_buffer(duplex, 2)), color  = "blue") +
+  # geom_sf(data = st_buffer(duplex, 2), fill = "deeppink4", color  = "deeppink4") +
+  geom_sf(data = duplex, fill = "mistyrose", color  = "hotpink4") +
+  coord_sf() +
+  theme_minimal()
+
+```
+
+
+
+## Northrop + Gillett
+
+```{r}
+
+puzzle <- function(dorm) {
+  
+  dorm <-  st_cast(dorm, "LINESTRING") %>%
+    mutate(size = st_length(geometry))
+  
+  dorm.outline <- dorm$geometry[which.max(dorm$size)]
+  bbDorm <- st_as_sfc(st_bbox(dorm))
+  
+  gapDorm <- st_difference(bbDorm, st_cast(dorm.outline, "POLYGON"))
+  gapDorm <- st_cast(gapDorm, "POLYGON")
+  
+  g <- st_coordinates(st_centroid(gapDorm))
+  matchDorm <- gapDorm[which.min(g[,2])]
+  
+  matchDorm
+  
+}
+
+```
+
+```{r, warning=FALSE}
+
+northrop <- blueprints(27)
+gillet <- blueprints(16)
+
+northrop <- st_cast(northrop, "LINESTRING") %>%
+  mutate(size = st_length(geometry))
+gillet <- st_cast(gillet, "LINESTRING") %>%
+  mutate(size = st_length(geometry))
+
+
+ggplot() +
+  # geom_sf(data = gillet, fill = "khaki1", color = "khaki3") +
+  # geom_sf(data = puzzle(gillet), fill = "khaki3", color = "khaki4") +
+  geom_sf(data = northrop, fill = "khaki1", color = "khaki3") +
+  geom_sf(data = puzzle(northrop), fill = "khaki3", color = "khaki4") +
+  coord_sf() +
+  theme_minimal()
+
+st_bbox(puzzle(gillet))
+st_bbox(puzzle(northrop))
+
+```
+
+
+
+## Chase + Duckett
+
+```{r, warning=FALSE}
+
+chase <- blueprints(8)
+duckett <- blueprints(12)
+
+```
+
+```
+
+getAB <- function(outline, n) {
+  
+  pt <- st_coordinates(outline)[n,1:2]
+  st_point(c(pt[1], pt[2]))
+  
+}
+```
+
+```{r, warning=FALSE}
+
+chase.outline <- outline(chase) %>%
+  st_simplify(preserveTopology = TRUE, dTolerance = 2)
+
+chase.A <- getAB(chase.outline, 16)
+chase.B <- getAB(chase.outline, 9)
+
+```
+
+```
+
+# make this a function somehow?
+# Chase
+
+ggplot() +
+  geom_sf(data = chase.outline, fill = "honeydew2", alpha = 0.5) +
+  geom_sf(data = chase.pts, color = "gray30", size = 3) +
+  # geom_sf(data = chase.pts, aes(color = size), size = 2.5) +
+  geom_sf(data = chase.pts[5:20,], aes(color = size), size = 2.5) +
+  scale_color_distiller(palette = "PRGn") +
+  coord_sf() +
+  theme_minimal()
+
+ggplot() +
+  geom_sf(data = chase.outline, fill = "honeydew2", alpha = 0.5) +
+  geom_sf(data = chase.A, color = "honeydew4", size = 3) +
+  geom_sf(data = chase.B, color = "honeydew4", size = 3) +
+  coord_sf() +
+  theme_minimal()
+
+
+
+# Duckett
+
+ggplot() +
+  geom_sf(data = duckett.outline, fill = "honeydew2", alpha = 0.5) +
+  geom_sf(data = duckett.pts, color = "gray30", size = 3) +
+  # geom_sf(data = duckett.pts, aes(color = size), size = 2.5) +
+  geom_sf(data = duckett.pts[1:15,], aes(color = size), size = 2.5) +
+  scale_color_distiller(palette = "PRGn") +
+  coord_sf() +
+  theme_minimal()
+
+ggplot() +
+  geom_sf(data = duckett.outline, fill = "honeydew2", alpha = 0.5) +
+  geom_sf(data = duckett.A, color = "honeydew4", size = 3) +
+  geom_sf(data = duckett.B, color = "honeydew4", size = 3) +
+  coord_sf() +
+  theme_minimal()
+
+```
+
+```{r, warning=FALSE}
+
+duckett.outline <- outline(duckett) %>%
+  st_simplify(preserveTopology = TRUE, dTolerance = 2)
+
+da = 1 
+db = 10
+
+duckett.A <- getAB(duckett.outline, da)
+duckett.B <- getAB(duckett.outline, db)
+
+```
+
+```{r, warning=FALSE}
+
+# transformation: scale
+
+f <- st_distance(chase.A,chase.B) / st_distance(duckett.A,duckett.B)
+duckett.scaled <- wk_transform(duckett.outline, wk_affine_scale(scale_x = f, scale_y = f))
+
+duckett.A <- getAB(duckett.scaled, da)
+duckett.B <- getAB(duckett.scaled, db)
+
+
+# transformation: rotation
+
+d.theta <- atan((duckett.A[2]-duckett.B[2])/(duckett.A[1]-duckett.B[1]))
+c.theta <- atan((chase.B[2]-chase.A[2])/(chase.B[1]-chase.A[1])) 
+wk.theta <- -1*(d.theta-c.theta)*(180/pi)
+
+duckett.rotated <- wk_transform(duckett.scaled, wk_affine_rotate(wk.theta))
+
+duckett.A <- getAB(duckett.rotated, da)
+duckett.B <- getAB(duckett.rotated, db)
+
+
+# transformation: translation
+
+duckett.done <- wk_transform(duckett.rotated, wk_affine_translate(
+  dx = (chase.A[1]-duckett.A[1]), 
+  dy = (chase.A[2]-duckett.A[2])))
+
+duckett.A <- getAB(duckett.done, da)
+duckett.B <- getAB(duckett.done, db)
+
+
+
+# Chuckett plot
+
+ggplot() +
+  geom_sf(data = chase.outline, fill = "lightskyblue3", alpha = 0.3) +
+  geom_sf(data = chase.A, color = "hotpink", size = 3) +
+  geom_sf(data = chase.B, color = "lightskyblue4", size = 3) +
+  # geom_sf(data = duckett.outline, fill = "gray", alpha = 0.3) +
+  geom_sf(data = duckett.done, fill = "gold2", alpha = 0.3) +
+  geom_sf(data = duckett.A, color = "hotpink", size = 3) +
+  geom_sf(data = duckett.B, color = "gold4", size = 3) +
+  coord_sf() +
+  theme_minimal()
+
+```
+
+
+
+## Normalizing across floors of same house 
+
+```{r, warning=FALSE}
+
+jordan2 <- blueprints(21, pg = 2)
+jordan2 <- wk_transform(jordan2, wk_affine_rotate(-90))
+
+
+# ggplot() +
+#   geom_sf(data = jordan, fill = "plum3", color  = "plum4") +
+#   geom_sf(data = jordan2, fill = "lightskyblue3", color  = "lightskyblue4") +
+#   coord_sf() +
+#   theme_minimal()
+
+
+jordan.outline <- outline(jordan)
+jordan2.outline <- outline(jordan2)
+
+
+id.nodes(jordan.outline, c(7,118))
+# c(117:118, 155:156)
+# c(7:8, 241:242, 283:284, 310)
+
+id.nodes(jordan2.outline, c(163, 150))
+# c(149:150)
+# c(163:164, 3:4, 9:10)
+
+
+w<-match.scale(jordan2.outline, 163, 150, "",
+               jordan.outline, 7, 118, "h.dist")
+
+ggplot() +
+  geom_sf(data = jordan.outline, fill = "plum3", color  = "plum4", alpha = 0.4) +
+  geom_sf(data = jordan2.outline, fill = "gray80", color  = "gray60", alpha = 0.2) +
+  geom_sf(data = w, fill = "lightskyblue3", color  = "lightskyblue4", alpha = 0.4) +
+  coord_sf() +
+  theme_minimal()
+
+
+```
+
+```{r, warning=FALSE}
+
+jordan3 <- blueprints(21, pg = 3)
+jordan3 <- wk_transform(jordan3, wk_affine_rotate(-90))
+jordan3.outline <- outline(jordan3)
+
+jordan4 <- blueprints(21, pg = 4)
+jordan4 <- wk_transform(jordan4, wk_affine_rotate(-90))
+jordan4.outline <- outline(jordan4)
+
+
+ggplot() +
+  geom_sf(data = jordan2.outline, fill = "gray80",color="gray60",alpha=0.3) +
+  geom_sf(data = jordan3.outline, fill = "plum3", color  = "plum4", alpha = 0.4) +
+  coord_sf() +
+  theme_minimal()
+
+# id.nodes(w, c(10,163))
+id.nodes(jordan3.outline, c(24,281))
+id.nodes(jordan4.outline, c(48,49))
+# nrow(st_coordinates(jordan3.outline))
+
+w3<-match.scale(jordan3.outline, 24, 281, "",
+                w, 163, 10, "")
+
+w4<-match.scale(jordan4.outline, 48, 49, "",
+                w, 163, 10, "")
+
+w3<-match.position(w3, 24, w, 10)
+w4<-match.position(w4, 48, w, 10)
+
+
+ggplot() +
+  # geom_sf(data = jordan.outline, fill = "plum3", color  = "plum4", alpha = 0.4) +
+  geom_sf(data = w, fill = "gray80", color  = "gray60", alpha = 0.2) +
+  geom_sf(data = w3, fill = "khaki3", color  = "khaki4", alpha = 0.4) +
+  geom_sf(data = w4, fill = "lightskyblue3", color  = "lightskyblue4", alpha = 0.4) +
+  coord_sf() +
+  theme_minimal()
+
+```
+
+```{r,warning=FALSE}
+
+click.node <- function(n, pg=1, footprint = FALSE) {
+  
+  if (footprint == TRUE) {
+    dorm <- stencil$turn[stencil$pdfID == n]
+    dorm <- st_as_sf(dorm)
+  } else {
+    dorm <- blueprints(n, pg = pg)
+    dorm <- outline(dorm)
+  }
+  
+  dorm.node <- st_cast(dorm, "POINT")
+  dorm.node$size <- 1:nrow(dorm.node)
+  
+  dorm.gui <- ggplot() +
+    geom_sf(data = dorm, fill = "khaki3", color = "khaki4", alpha = 0.4) +
+    geom_sf_interactive(data = dorm.node, aes(tooltip = size, data_id = size),
+                        color = "khaki4", size = 1) +
+    coord_sf() +
+    theme_minimal()
+  
+  dorm.gui <- girafe(ggobj = dorm.gui)
+  dorm.gui <- girafe_options(dorm.gui, opts_zoom(min = .7, max = 5))
+  
+  dorm.gui
+  
+}
+
+
+# jp <- st_cast(jordan.outline, "POINT")
+# jp$size <- 1:nrow(jp)
+# 
+# jui <- ggplot() +
+#   geom_sf(data = jordan.outline, fill = "khaki3", color = "khaki4", alpha = 0.4) +
+#   # geom_sf(data = jp, color = "khaki4", size = 1) +
+#   geom_sf_interactive(data = jp, aes(tooltip = size, data_id = size), 
+#                       color = "khaki4", size = 1) +
+#   coord_sf() +
+#   theme_minimal()
+# 
+# girafe(ggobj = jui)
+# # id.nodes(jordan.outline)
+
+```
+
+
+```{r, warning=FALSE}
+x = 34
+click.node(x)
+click.node(x, pg = 2)
+# click.node(x, footprint = TRUE)
+```
+
+
+```{r,warning=FALSE}
+
+ggempty <- ggplot() + theme_minimal()
+
+# girafe_wrap <- function(gg) {
+#   gg <- girafe(ggobj = gg)
+#   gg <- girafe_options(gg, opts_zoom(min = .7, max = 5))
+# }
+
+# ACROSS.FLOORS(): THE INTERACTIVE VERSION
+across.floors <- function(n) {
+  
+  gg0 <- stencil$turn[stencil$pdfID == n]
+  gg0 <- st_as_sf(gg0)
+
+  gg0.node <- st_cast(gg0, "POINT")
+  gg0.node$size <- 1:nrow(gg0.node)
+
+  gg0.gui <- ggplot() +
+    geom_sf(data = gg0, fill = "lightcyan3", color = "lightcyan4", alpha = 0.4) +
+    geom_sf_interactive(data = gg0.node, aes(tooltip = size, data_id = size),
+                        color = "lightcyan4", size = 1) +
+    coord_sf() +
+    theme_minimal()
+  
+    
+  for (i in 1:5) {
+    assign(paste0("gg", i, ""), ggempty) 
+  }
+  
+  npgs <- pdftools::pdf_length(pdf.files[n])
+  
+  for (i in 1:npgs) {
+    
+    dorm <- outline(blueprints(n, pg = i))
+
+    dorm.node <- st_cast(dorm, "POINT")
+    dorm.node$size <- 1:nrow(dorm.node)
+  
+    if (i == 1) {
+      fill = "goldenrod3"
+      color = "goldenrod4"
+    } else {
+      fill = "lemonchiffon3"
+      color = "lemonchiffon4"
+    }
+    
+    dorm.gui <- ggplot() +
+      geom_sf(data = dorm, fill = fill, color = color, alpha = 0.4) +
+      geom_sf_interactive(data = dorm.node, aes(tooltip = size, data_id = size),
+                          color = color, size = 1) +
+      coord_sf() +
+      theme_minimal()
+    
+    assign(paste0("gg", i, ""), dorm.gui) 
+    
+  }
+  
+  
+  allfloors <- girafe(ggobj = ggpubr::ggarrange(gg0.gui, gg1, gg2, gg3, gg4, gg5))
+  allfloors <- girafe_options(allfloors, opts_zoom(min = .7, max = 5))
+
+  allfloors
+  
+  
+  # gg0.gui <- girafe_wrap(gg0.gui)
+  # gg1 <- girafe_wrap(gg1)
+  # gg2 <- girafe_wrap(gg2)
+  # gg3 <- girafe_wrap(gg3)
+  # gg4 <- girafe_wrap(gg4)
+  # gg5 <- girafe_wrap(gg5)
+  # 
+  # # allfloors <- ggpubr::ggarrange(gg0.gui, gg1, gg2, gg3, gg4, gg5)
+  # 
+  # allfloors <- patchwork::wrap_plots(gg0.gui, gg1, gg2, gg3, gg4, gg5)
+  # 
+  # allfloors
+  
+}
+
+
+
+
+```
+
+```{r,warning=FALSE}
+
+ggempty <- ggplot() + theme_minimal()
+
+key.nodes <- readxl::read_excel("C:/Users/jaria/Downloads/nodes_annotation.xlsx", sheet = "Sheet1") %>% as.data.frame()
+
+# ACROSS.FLOORS(): THE STATIC VERSION
+across.floors <- function(n) {
+  
+  gg0 <- stencil$turn[stencil$pdfID == n]
+  gg0 <- st_as_sf(gg0)
+
+  gg0.node <- st_cast(gg0, "POINT")
+  gg0.node$size <- 1:nrow(gg0.node)
+
+  gg0 <- ggplot() +
+    geom_sf(data = gg0, fill = "lightcyan3", color = "lightcyan4", alpha = 0.4) +
+    geom_sf(data = gg0.node, color = "lightcyan4", size = 1) +
+    coord_sf() +
+    theme_minimal()
+  
+  
+  gg1 <- outline(blueprints(n, pg = 1))
+  
+  gg1.node <- st_cast(gg1, "POINT")
+  gg1.node$size <- 1:nrow(gg1.node)
+
+  gg1 <- ggplot() +
+      geom_sf(data = gg1, fill = "thistle3", color = "thistle4", alpha = 0.4) +
+      geom_sf(data = gg1.node, color = "thistle4", size = 1) +
+      coord_sf() +
+      theme_minimal()
+  
+  
+  key.nodes <- key.nodes[key.nodes$pdf_id == n,]
+  
+  gg0.key <- c(key.nodes[,4], key.nodes[,5])
+  gg1.key <- c(key.nodes[,2], key.nodes[,3])
+  
+  gg0 <- gg0 + geom_sf(data = gg0.node[gg0.key,], color = "sienna3", size = 2)
+  gg1 <- gg1 + geom_sf(data = gg1.node[gg1.key,], color = "sienna3", size = 2)
+   
+  
+  for (i in 2:5) {
+    assign(paste0("gg", i, ""), ggempty) 
+  }
+  
+  
+  npgs <- pdftools::pdf_length(pdf.files[n])
+  
+  for (i in 2:npgs) {
+    
+    dorm <- outline(blueprints(n, pg = i))
+
+    dorm.node <- st_cast(dorm, "POINT")
+    dorm.node$size <- 1:nrow(dorm.node)
+    
+    dorm <- ggplot() +
+      geom_sf(data = dorm, fill = "lemonchiffon3", color = "lemonchiffon4", alpha = 0.4) +
+      geom_sf_interactive(data = dorm.node, aes(tooltip = size, data_id = size), 
+                          color = "lemonchiffon4", size = 1) +
+      coord_sf() +
+      theme_minimal()
+    
+    assign(paste0("gg", i, ""), dorm) 
+    
+  }
+  
+     
+  
+  allfloors <- ggpubr::ggarrange(gg0, gg1, gg2, gg3, gg4, gg5, ncol = 2, nrow = 3)
+  
+  allfloors <- girafe(ggobj = allfloors, 
+                      options = list(opts_selection(type="multiple", only_shiny=FALSE)))
+  allfloors <- girafe_options(allfloors, opts_zoom(min = .7, max = 5))
+
+  allfloors
+  
+  
+}
+
+
+
+
+```
+
+
+```{r}
+across.floors(24)
+# girafe(ggobj = ggpubr::ggarrange(jui, jui, jui, jui),
+#        options = list(opts_selection(type = "multiple", only_shiny = FALSE)))
+```
+
+
+```{r,warning=FALSE}
+
+i<-lock.ratio(stencil$turn[stencil$pdfID==20])
+
+i<-match.scale(i,12,9,"",outline(blueprints(20)),81,72,"")
+
+i<-match.position(i,12,outline(blueprints(20)),81)
+
+ggplot()+
+  geom_sf(data = outline(blueprints(20)),
+          fill="goldenrod1",alpha=0.4) +
+  geom_sf(data = i, fill=NA, color="royalblue") +
+  coord_sf() +
+  # theme_minimal()
+  theme_void()
+
+ggplot()+
+  geom_sf(data = stencil$turn[stencil$pdfID==20], fill=NA, color="royalblue") +
+  coord_sf() +
+  # theme_minimal()
+  theme_void()
+
+# plot(dorm.pdf(8),col="black")
+
+ib <- outline(blueprints(20))
+ib <- ib$geometry
+ib <- st_as_sf(ib)
+ib <- wk::wk_transform(ib, wk::wk_affine_rescale(rct_in = wk_bbox(ib), rct_out = wk_bbox(stencil$turn[stencil$pdfID==20])))
+st_crs(ib) <- st_crs(stencil$geometry)
+
+b <- stencil$bearing[stencil$pdfID == 20]
+ib2 <- wk_transform(ib, wk_affine_rotate(b*180/pi))
+ib2 <- st_as_sf(ib2)
+st_crs(ib2) <- st_crs(ib)
+
+ib2 <- match.center(ib2, stencil$geometry[stencil$pdfID==20])
+st_crs(ib2) <- st_crs(ib)
+
+ggplot()+
+  geom_sf(data = stencil$geometry[stencil$pdfID==20], 
+          fill="honeydew3", color="honeydew4") +
+  # geom_sf(data = stencil$turn[stencil$pdfID==20], fill="khaki", color="khaki4") +
+  # geom_sf(data = ib, fill=NA, color="sienna3") +
+  geom_sf(data = ib2, fill=NA, color="plum4") +
+  coord_sf() +
+  theme_minimal()
+
+
+```
+
+```{r, warning=FALSE}
+# 27 Northrop House
+# 16 Gillett House
+# 113 objectID
+
+# pdfID==16; blueprints(a,b)=(34,17), footprint(a,b)=(58,57)
+# pdfID==27; blueprints(a,b)=(106,97); footprint(a,b)=(76,75)
+
+j<-lock.ratio(stencil$turn[stencil$OBJECTID==113])
+
+j<-match.scale(j,58,57,"",outline(blueprints(16)),34,17,"")
+j<-match.position(j,58,outline(blueprints(16)),34)
+
+# j<-match.scale(j,76,75,"",outline(blueprints(27)),106,97,"")
+# j<-match.position(j,76,outline(blueprints(27)),106)
+
+
+ggplot()+
+  geom_sf(data = outline(blueprints(16)),
+          fill="goldenrod1",alpha=0.4) +
+  # geom_sf(data = outline(blueprints(27)),
+  #         fill="goldenrod1",alpha=0.4) +
+  geom_sf(data = j, fill=NA, color="royalblue") +
+  coord_sf() +
+  # theme_minimal()
+  theme_void()
+
+# j<-st_as_sf(j)
+jr<-outline(blueprints(16))
+jj <- c(st_as_sfc(j), st_as_sfc(jr))
+
+jj <- st_as_sf(jj)
+jj <- wk::wk_transform(jj, wk::wk_affine_rescale(rct_in = wk_bbox(jj), rct_out = wk_bbox(stencil$turn[stencil$pdfID==16])))
+st_crs(jj) <- st_crs(stencil$geometry)
+
+b <- stencil$bearing[stencil$pdfID == 16]
+jj2 <- wk_transform(jj, wk_affine_rotate(b*180/pi))
+jj2 <- st_as_sf(jj2)
+st_crs(jj2) <- st_crs(jj)
+
+
+```
+
+```{r}
+gil<- blueprints(16)
+
+ggplot() +
+  geom_sf(data = gil, fill = NA, color = "black") +
+  # geom_sf(data = st_buffer(chpdf, 12, joinStyle="MITRE", mitreLimit=3),
+  #         fill = "lightskyblue4", color = "white", alpha=0.6, linewidth = 0.7) +
+  geom_sf(data = st_buffer(st_buffer(gil, 12, joinStyle="MITRE", mitreLimit=3),
+                           -12, joinStyle="MITRE", mitreLimit=3), 
+          fill = "lightskyblue4", color = "white", alpha=0.6, linewidth = 0.7) +
+  geom_sf(data = outline(gil), fill = NA, color = "sienna", linewidth = 0.7) +
+  coord_sf() +
+  theme_minimal()
+
+# plot(st_buffer(gil, 12, joinStyle="MITRE", mitreLimit=3))
+```
+
+```{r}
+
+rooms <- function(pdfID) {
+  
+  dorm <- blueprints(pdfID)
+  
+  dorm <- st_buffer(st_buffer(dorm, 12, joinStyle="MITRE", mitreLimit=3), 
+                    -12, joinStyle="MITRE", mitreLimit=3)
+  
+  dorm.outline <- outline(dorm)
+  
+  dorm.rooms <- st_difference(dorm.outline, dorm)
+  
+  dorm.rooms <- dorm.rooms$geometry
+  
+  dorm.rooms 
+}
+
+
+rooms(19) %>% plot()
+
+# c(outline(blueprints(19)), rooms(19))
+
+```
+
+```{r,warning=FALSE}
+# click.node(8,footprint = TRUE)
+# click.node(8)
+
+i<-lock.ratio(stencil$turn[stencil$pdfID==8])
+
+i<-match.scale(i,56,7,"",outline(blueprints(8)),260,16,"")
+
+i<-match.position(i,7,outline(blueprints(8)),16)
+
+ggplot()+
+  geom_sf(data = outline(blueprints(8)),
+          fill="goldenrod1",alpha=0.4) +
+  geom_sf(data = i, fill=NA, color="royalblue") +
+  coord_sf() +
+  # theme_minimal()
+  theme_void()
+
+ggplot()+
+  geom_sf(data = stencil$turn[stencil$pdfID==8], fill=NA, color="royalblue") +
+  coord_sf() +
+  # theme_minimal()
+  theme_void()
+
+# plot(dorm.pdf(8),col="black")
+
+```
+
+```{r}
+ggplot()+
+  geom_sf(data = i, fill=NA, color="royalblue") +
+  coord_sf() +
+  theme_void()
+
+ggplot()+
+  geom_sf(data = st_normalize(i), fill=NA, color="royalblue") +
+  coord_sf() +
+  theme_void()
+
+ggplot()+
+  geom_sf(data = st_geometrycollection(c(i1,ig)), 
+          fill=NA, color="royalblue") +
+  coord_sf() +
+  theme_void()
+
+ggplot()+
+  geom_sf(data = st_normalize(st_geometrycollection(c(i1,ig))), 
+          fill=NA, color="royalblue") +
+  coord_sf() +
+  theme_void()
+
+```
+
+
+
+```
+id.nodes(outline(cushing), c(91:92,123:124))
+# st_coordinates(outline(cushing))[c(91,92,123,124),1:2]
+id.nodes(outline(cushing), c(211,237:238,255:256), dark.halo = TRUE)
+# st_coordinates(outline(cushing))[c(211, 237:238, 255:256),1:2]
+# st_coordinates(outline(cushing))[c(210,211),1:2]
+```
+
+```{r}
+x=data.frame(px = pdf.files)
+for (i in 1:length(pdf.files)) {x$pl[i] <- pdftools::pdf_length(x$px[i])}
+# if (pdftools::pdf_length(pdf.files[i] < pg)) {pg=1} else {pg=pg}
+```
+
+
+
+```{r, warning=FALSE}
+
+
+pdf(width = 12, height = 8, "viewblue_lvl5.pdf")
+
+
+for (i in 1:length(pdf.files)) {
+  
+  pg=5
+  
+  if (pdftools::pdf_length(pdf.files[i]) < pg) {
+    print(ggplot() + theme_minimal() + labs(title = aa[i,4]))
+  } else {print(preview(i, pg=pg))}
+
+  print(paste("preview(", i, ")", sep = ""))
+  
+  }
+
+dev.off()
+
+
+```
+
+
+
+
+##Segmenting Rooms
+
+```{r, warning=FALSE}
+
+jordan2 <- blueprints(21, pg = 2)
+jordan2.outline <- outline(jordan2)
+
+jordan200 <- st_difference(jordan2.outline, jordan2) %>%
+  st_cast("POLYGON") %>%
+  dplyr::select(size) %>%
+  mutate(size = st_area(geometry)) %>%  
+  mutate(room = ifelse((size>3000 & size<10000), TRUE, FALSE)) %>%  
+  filter(room == TRUE)
+
+jordan200$room <- 1:nrow(jordan200) 
+
+# hist(jordan200$size[jordan200$size<500])
+# hist(jordan200$size[jordan200$size<10000 & jordan200$size>1000])
+
+# i = st_distance(jordan200[jordan200$size>3000 & jordan200$size<10000,],
+#                 st_boundary(jordan2.outline))  # avg.dist ~8-9
+
+# st_distance(jordan200, st_cast(jordan2.outline, "LINESTRING"))  #alternative
+
+i <- st_cast(st_voronoi(st_combine(st_centroid(jordan200))))
+
+i <- i %>%
+  st_intersection(st_union(st_buffer(jordan200, 9, joinStyle="MITRE", mitreLimit=3))) %>%
+  st_as_sf() 
+
+st_geometry(i) <- "geometry"
+i<- st_join(i, st_centroid(jordan200))
+
+
+ggplot() +
+  geom_sf(data = jordan2.outline, fill = "seashell", color = "lightskyblue4", alpha=0.5) +
+  geom_sf(data = jordan200, fill = "lightskyblue3", color = "lightskyblue4", alpha=0.6) +
+  # geom_sf(data = st_union(st_buffer(jordan200, 8)), 
+  #         fill = "white", color  = "khaki4", alpha = 0.5) +
+  # geom_sf(data =st_buffer(jordan2.outline,-8), fill="white", color="plum3", alpha=0.3) +
+  geom_sf(data = i, color = "coral3", fill = "white", alpha = 0.3) +
+  geom_sf(data = i[i$room==3,], fill = "coral3") +
+  # geom_sf(data = st_centroid(jordan200[jordan200$room==3,]), color = "coral4") +
+  coord_sf() +
+  theme_minimal()
+
+```
+
+
+```
+
+# j2in <- geos::as_geos_geometry(jordan200) %>% 
+#   geos::geos_make_collection() %>% 
+#   geos::geos_concave_hull_of_polygons(0.14) %>%
+#   st_as_sf() %>%
+#   st_intersection(jordan2.outline$geometry)
+
+```
+
+
+```{r, warning=FALSE}
+
+j2in <- jordan2.outline %>%
+  st_buffer(-60, joinStyle="MITRE", mitreLimit=3) %>%
+  st_simplify(dTolerance = 1)
+
+
+# ggplot() +
+#   geom_sf(data=jordan2.outline, fill="lemonchiffon1", color="lemonchiffon4", alpha=0.5) +
+#   geom_sf(data = jordan200, fill="lemonchiffon3", color="lemonchiffon4", alpha=0.6) +
+#   # geom_sf(data = j2in, color="cadetblue", fill=NA, linewidth=1.5) +
+#   geom_sf(data = st_buffer(j2in, 60, joinStyle="MITRE", mitreLimit=3), 
+#           color = "cadetblue", fill = NA, linewidth = 1.5) +
+#   geom_sf(data = st_buffer(j2in, 52, joinStyle="MITRE", mitreLimit=3), 
+#           color = "coral3", fill = NA, linewidth = 0.8) +
+#   coord_sf() +
+#   theme_minimal()
+
+
+j2in <- st_buffer(j2in, 51, joinStyle="MITRE", mitreLimit=3) %>%
+  st_union(st_combine(jordan200))
+
+
+ggplot() +
+  geom_sf(data = jordan200, fill = "lightskyblue3", color = "lightskyblue4", alpha=0.6) +
+  geom_sf(data = st_difference(i, j2in), fill = "lightskyblue4", color = "white",
+          alpha=0.6, linewidth = 0.7) +
+  coord_sf() +
+  theme_minimal()
+
+
+j2window <- st_difference(i, j2in)[,1:2]
+
+```
+
+```{r, warning=FALSE}
+
+# chpdf <- blueprints(37, pg=3)           # Tyler, 3rd Floor
+# click.node(37, pg=3)   # comment out 'dorm <- outline(dorm)' to keep interior
+# st_coordinates(chpdf)[c(497,514),1:2]   # used to get dist of doorway
+#        X   Y     # result = doorway of width ~18, 
+# [1,] 262 216     # buffer closes the dist from both sides of the doorway 
+# [2,] 244 216     # so buffer dist needs to be >=9
+
+ggplot() +
+  geom_sf(data = chpdf, fill = NA, color = "black") +
+  # geom_sf(data = st_buffer(chpdf, 12, joinStyle="MITRE", mitreLimit=3),
+  #         fill = "lightskyblue4", color = "white", alpha=0.6, linewidth = 0.7) +
+  geom_sf(data = st_buffer(st_buffer(chpdf, 12, joinStyle="MITRE", mitreLimit=3),
+                           -12, joinStyle="MITRE", mitreLimit=3), 
+          fill = "lightskyblue4", color = "white", alpha=0.6, linewidth = 0.7) +
+  # geom_sf(data = outline(chpdf), fill = NA, color = "sienna", linewidth = 0.7) +
+  coord_sf() +
+  theme_minimal()
+
+# buffer set to dist=12 also conveniently encompasses the exterior wall (window)
+# note that there are a few closets with the letter C attached to the wall 
+
+```
+
+
+```{r}
+
+# st_bbox(blueprints(18)$geometry)
+# >   xmin  ymin  xmax  ymax 
+# >    174   291  1057   769 
+
+
+bb=wk_transform(stencil$turn[stencil$pdfID==18], wk_affine_translate(dx = 0, dy = 0))
+# maybe make: wkify <- function(stencil) {wk_transform(stencil, wk_translate(dx=0,dy=0))}
+
+b=wk::wk_transform(blueprints(18)$geometry, wk_affine_rescale(rct_in = wk::rct(174,291,1057,769), rct_out = wk::rct(st_bbox(bb)[1],st_bbox(bb)[2],st_bbox(bb)[3],st_bbox(bb)[4])))
+
+b=wk_transform(b, wk_affine_translate(dx = st_bbox(bb)[1]-st_bbox(b)[1], dy = st_bbox(bb)[4]-st_bbox(b)[4]))
+
+plot(b,col=NA)
+plot(bb,col=NA,border="hotpink",lwd=3, add=TRUE)
+
+```
+
+
+
+```{r, warning=FALSE}
+
+j2pdf <- dorm.pdf(21, pg = 2)
+
+plot(j2pdf, col="black")
+# plot(jordan200[,3], add = TRUE)
+plot(j2window[,2], add = TRUE)
+
+plot(terra::mask(j2pdf,jordan2.outline), col="black")
+plot(terra::crop(j2pdf,j2window,mask=TRUE), col="black")
+
+a <- terra::crop(j2pdf,j2window[2,],mask=TRUE)
+# a <- terra::crop(j2pdf,j2window[1,],mask=TRUE)
+# plot(terra::boundaries(a))
+plot(a, col="black")
+plot(focal(a,w=5), col="darkorange", add=TRUE)
+
+
+# try getting extent of the/each focal patch for a given room to get spatial coordinates, from which an estimate (whether from an average xy for a point, or avg range for a centerline, or max/min of range for two end points)
+# if there is not a point on surface function for a raster patch, then whatever geometry is produced will have to be verified using point on surface or point on a raster cell where is.focal=true, to make sure that the calculation didn't produce a point that's in the middle of the extent but not touching the patch (eg, a point that is half-way across a u-shape can either land at the apex or on empty space)
+
+plot(a, col="black")
+# plot(focal(a,w=5), col="darkorange", add=TRUE)
+plot(patches(focal(a,w=5)), col=c("darkorange2","steelblue"), add=TRUE)
+plot(terra::as.polygons(patches(focal(a,w=5))), col=NA, border="khaki", add=TRUE)
+
+
+# j2window$room <- as.factor(j2window$room)
+# plot(terra::crop(j2pdf,j2window,mask=TRUE), col="black")
+# plot(st_intersection(j2window, st_as_sf(as.polygons(patches(focal(terra::crop(j2pdf,j2window,mask=TRUE), w=5)))))[,2], col="goldenrod1", border=NA, add=TRUE)
+# plot(j2window[,2], col=NA, border = brewer.pal(25, "Dark2"), add = TRUE)
+
+```
+
+# LOOK HERE FOR STENCIL AND TURN90
+
+```{r}
+
+feetID <- readxl::read_excel("C:/Users/jaria/Downloads/feetID.xlsx", sheet = "Sheet1")
+ 
+### https://stackoverflow.com/questions/54696440/create-polygons-representing-bounding-boxes-for-subgroups-using-sf
+
+bbox_wrap <- function(x) st_as_sfc(st_bbox(x))
+
+shoebox <- feet %>%
+  dplyr::select(OBJECTID, geometry) %>%
+  mutate(shoes = purrr::map(geometry, bbox_wrap)) %>% 
+  mutate(shoes = st_as_sfc(do.call(rbind, shoes)))
+
+st_crs(shoebox$shoes) <- st_crs(shoebox$geometry)
+
+
+fix.socks <- cbind(pdfID = c(2, 5, 7, 8, 17, 18, 23, 29, 31, 33, 37),
+                   buff = c(2, 8, 20, 40, 18, 14, 30, 20, 15, 15, 30))
+
+fix.socks <- as.data.frame(fix.socks) %>%
+  left_join(feetID, by = "pdfID") 
+
+shoebox <- shoebox %>% 
+  full_join(fix.socks[,c(2,4)], by = "OBJECTID") %>%
+  mutate(buff = ifelse(is.na(buff), 0, buff))
+
+shoebox <- shoebox %>%
+  mutate(socks = st_buffer(geometry, dist = -1*buff, joinStyle="MITRE", mitreLimit=3)) %>%
+  mutate(socks = st_buffer(socks, dist = buff, joinStyle="MITRE", mitreLimit=3)) %>%
+  mutate(socks = st_minimum_rotated_rectangle(socks)) %>%
+  dplyr::select(-buff)
+
+
+# https://r-spatial.github.io/sf/articles/sf3.html
+rot = function(a) matrix(c(cos(a), sin(a), -sin(a), cos(a)), 2, 2)
+
+
+#https://math.stackexchange.com/questions/1589793/a-formula-to-convert-a-counter-clockwise-angle-to-clockwise-angle-with-an-offset#:~:text=If%20%CE%B8%20is%20your%20original,the%20offset%20of%20ninety%20degrees.
+
+shoebox$bearing <- NA
+shoebox$turn <- NA
+
+for (i in 1:nrow(shoebox)) {
+
+  n <- st_coordinates(shoebox$socks[i])[1:4,1:2]
+  n <- n[order(n[,2])[1:2],]
+  
+  b <- atan((n[2,2] - n[1,2]) / abs(n[1,1] - n[2,1]))
+ 
+  if (n[2,1] < n[1.1]) {
+    b <- (-b+(pi/2))%%(2*pi)
+  } else { b <- b }
+
+  shoebox$bearing[i] <- b
+  cntrd <- st_centroid(shoebox$geometry[i])
+  
+  shoebox$turn[i] <- (shoebox$geometry[i] - cntrd) * rot(b) + cntrd
+  
+}
+
+shoebox$turn <- st_as_sfc(shoebox$turn)
+st_crs(shoebox$turn) <- st_crs(shoebox$geometry)
+
+# plot(shoebox$turn[1])
+# plot(shoebox$turn[16])
+# plot(shoebox$geometry[16])
+# plot(shoebox$turn[38])
+
+
+ggplot() +
+  # geom_sf(data = shoebox$shoes, fill = "khaki") +
+  geom_sf(data = shoebox$socks, fill = "snow1", color = "snow4", alpha=0.4) +
+  geom_sf(data = shoebox$turn, fill = "sienna3", color = "sienna4") +
+  coord_sf() +
+  theme_minimal()
+
+
+ggplot() +
+  geom_sf(data = shoebox$socks[16], fill = "lightskyblue3", color = "lightskyblue4") +
+  geom_sf(data = st_as_sfc(st_bbox(shoebox$turn[16])),
+          fill = "snow1", color = "snow3", alpha = 0.4) +
+  geom_sf(data = shoebox$turn[16], fill = "seashell2", color = "seashell4") +
+  coord_sf() +
+  theme_minimal()
+
+```
+
+```{r}
+turn90 <- readxl::read_excel("C:/Users/jaria/Downloads/turn90.xlsx", sheet = "Sheet1")
+
+stencil <- turn90 %>%
+  left_join(shoebox, by = "OBJECTID") %>%
+  mutate(bearing = bearing + (n_turns*(pi/2))) 
+
+
+for (i in 1:nrow(stencil)) {
+
+  b <- stencil$bearing[i]
+  cntrd <- st_centroid(stencil$geometry[i])
+  
+  stencil$turn[i] <- (stencil$geometry[i] - cntrd) * rot(b) + cntrd
+  
+}
+
+
+ggplot() +
+  # geom_sf(data = stencil$shoes, fill = "khaki") +
+  # geom_sf(data=bbox_wrap(lascamp), fill="honeydew3", color="honeydew4", alpha=0.4) +
+  # geom_sf(data = bbox_wrap(lascampB), fill="khaki3", color ="khaki4", alpha=0.4) +
+  geom_sf(data = stencil$socks, fill = "snow1", color = "snow4", alpha=0.4) +
+  geom_sf(data = stencil$turn, fill = "sienna3", color = "sienna4") +
+  coord_sf() +
+  theme_minimal()
+
+```
+
+
+
+
+# Printing PDFs
+
+```{r, warning=FALSE}
+
+stencil <- left_join(feetID, shoebox[,c(1,2,6)], by = "OBJECTID")
+
+
+pdf(width = 12, height = 8, "stencil.pdf")
+
+for (i in 1:length(pdf.files)) {
+  print(plot(stencil$turn[stencil$pdfID == i]))
+  print(paste(i, ": ", unique(stencil$V[stencil$pdfID == i]), sep = ""))
+  }
+
+dev.off()
+
+
+```
+
+
+```{r, warning=FALSE}
+
+stencil <- pdf_convert("C:/Users/jaria/Documents/stencil.pdf", 
+                       format = "tiff", pages = 1, verbose = FALSE) %>%
+  raster::stack() %>%
+  raster(layer = 1)
+
+stencil[stencil[] == 255] = NA
+stencil[!is.na(stencil[])] = 1
+  
+stencil <- stencil %>% 
+  terra::rast() %>%
+  terra::as.polygons() %>%
+  sf::st_as_sf() %>%
+  sf::st_cast("POLYGON")
+
+plot(stencil)
+
+```
+
+```{r, warning=FALSE}
+
+both.prints <- c(blueprints(4)$geometry, blueprints(21)$geometry)
+
+
+
+for (i in 1:length(pdf.files)) {
+
+    inside <- blueprints(i)
+  
+    
+  if (length(inside$geometry) == 0) {
+    
+    both.prints[i+1] <- NA
+    
+    } else {
+      
+      both.prints[i+1] <- outline(inside)$geometry
+      
+      }
+    
+}
+
+
+
+for (i in 1:length(pdf.files)) {
+  
+  ii <- i + length(pdf.files)+1
+  
+  if (i==14) {
+    both.prints[ii] <- st_combine(stencil$turn[stencil$pdfID==i])
+  } else {
+    both.prints[ii] <- stencil$turn[stencil$pdfID==i]
+  }
+  
+  
+}
+
+
+
+both.prints <- cbind(id = c(1:length(pdf.files),1:length(pdf.files)), 
+                     st_as_sf(both.prints[2:length(both.prints)]))
+
+both.prints <- both.prints %>%
+  mutate(bim = ifelse(id > length(pdf.files), "footprint", "blueprint")) %>%
+  mutate(id = ifelse(bim == "footprint", id/2, id))
+
+```
+
+```{r}
+
+ggpdf <- function(i) {
+  ggplot() +
+    geom_sf(data = both.prints[i,], color = "black") +
+    coord_sf() +
+    theme_minimal()
+}
+
+
+
+pdf(width = 12, height = 8, "ggpdf90.pdf")
+
+for (i in 1:length(pdf.files)) {
+  print(ggpubr::ggarrange(ggpdf(i), ggpdf(42+i), nrow = 1, ncol = 2, 
+                          labels = c(i,aa$V[i])))
+  }
+
+dev.off()
+
+```
+
+```{r}
+both.prints %>% 
+  filter(st_is_empty(x))
+```
+
+
+
+```{r}
+preview(1, rm.detail = FALSE)
+preview(3, rm.detail = FALSE)
+preview(14, rm.detail = FALSE)
+preview(18, rm.detail = FALSE)
+preview(20, rm.detail = FALSE)
+preview(23, rm.detail = FALSE)
+preview(28, rm.detail = FALSE)
+preview(36, rm.detail = FALSE)
+
+```
+
+
+```{r,warning=FALSE}
+
+print(hist(blueprints(1, rm.detail = FALSE)$size))
+print(hist(blueprints(3, rm.detail = FALSE)$size))
+print(hist(blueprints(14, rm.detail = FALSE)$size))
+print(hist(blueprints(18, rm.detail = FALSE)$size))
+print(hist(blueprints(20, rm.detail = FALSE)$size))
+print(hist(blueprints(23, rm.detail = FALSE)$size))
+print(hist(blueprints(28, rm.detail = FALSE)$size))
+print(hist(blueprints(36, rm.detail = FALSE)$size))
+
+```
+
+```{r}
+preview(2, rm.detail = FALSE)
+plot(outline(blueprints(14))$geometry)
+
+```
+
+
+
+```
+
+chuck.alb <- shoebox[shoebox$OBJECTID %in% feetID$OBJECTID[feetID$pdfID %in% c(8,5,4)],1:4]
+
+plot(chuck.alb$socks, col=NA, border=NA)
+plot(chuck.alb$shoes, col=NA, border="gray85", add=TRUE)
+plot(chuck.alb$socks, col=NA, border="gray25", add=TRUE)
+plot(chuck.alb$geometry, col="honeydew3", border="honeydew4", add=TRUE)
+plot(st_buffer(chuck.alb$geometry,-8, joinStyle="MITRE", mitreLimit=3), 
+     col="khaki2", border="khaki4", add=TRUE)
+plot(st_minimum_rotated_rectangle(st_buffer(chuck.alb$geometry,-8, joinStyle="MITRE", mitreLimit=3)), col=NA, border="darkorange3", add=TRUE)
+```
+
+
+```
+
+
+plot(new.socks$socks[new.socks$pdfID==i], col=NA, border=NA)
+plot(new.socks$shoes[new.socks$pdfID==i], col=NA, border="gray85", add=TRUE)
+plot(new.socks$socks[new.socks$pdfID==i], col=NA, border="gray25", add=TRUE)
+
+new.socks$geometry[new.socks$pdfID==i] %>%
+  plot(col="honeydew3", border="honeydew4", add=TRUE)
+
+new.socks$geometry[new.socks$pdfID==i] %>%
+  st_buffer(joinStyle="MITRE", mitreLimit=3, dist = d) %>%
+  plot(col="khaki2", border="khaki4", add=TRUE)
+
+new.socks$geometry[new.socks$pdfID==i] %>%
+  st_buffer(joinStyle="MITRE", mitreLimit=3, dist = d) %>%
+  st_minimum_rotated_rectangle() %>%
+  plot(col=NA, border="darkorange3", add=TRUE)
+
+```
+
+# Rotation Edits
+
+```{r}
+
+# new.socks <- feetID %>%
+#   filter(pdfID %in% c(2, 5, 7, 8, 17, 18, 23, 29, 31, 33, 37)) %>%
+#   inner_join(shoebox[,1:4], by = "OBJECTID") 
+
+
+new.socks <- function(p, d) {
+  
+  sock <- feetID %>%
+    filter(pdfID == p) %>%
+    inner_join(shoebox[,1:4], by = "OBJECTID")
+  
+  plot(sock$socks, col=NA, border=NA)
+  plot(sock$shoes, col=NA, border="gray85", add=TRUE)
+  plot(sock$socks, col=NA, border="gray25", add=TRUE)
+  plot(sock$geometry, col="honeydew3", border="honeydew4", add=TRUE)
+  
+  sock$geometry %>%
+    st_buffer(joinStyle="MITRE", mitreLimit=3, dist = d) %>%
+    plot(col="khaki2", border="khaki4", add=TRUE)
+  
+  sock$geometry %>%
+    st_buffer(joinStyle="MITRE", mitreLimit=3, dist = d) %>%
+    st_minimum_rotated_rectangle() %>%
+    plot(col=NA, border="darkorange3", add=TRUE)
+  
+}
+
+
+```
+
+
+```{r}
+
+# needs new min.rect to fix rotation:
+# pdfID = c(2,  5,   7,   8,  17,    18,  23,  29,  31,  33,  37))
+# buff = c(-2, -8, -20, -40, -18, -14.6, -30, -20, -15, -15, -30))
+
+# new.socks(5, -8)
+# new.socks(7, -20)
+# new.socks(8, -40)
+# new.socks(17, -18)
+# new.socks(18, -14.6)
+# new.socks(23, -30)
+# new.socks(29, -20)
+# new.socks(31, -15)
+# new.socks(33, -15)
+# new.socks(37, -30)
+# new.socks(2, -2) #unresolved
+```
+
+```{r}
+
+ii<-st_buffer(shoebox$geometry[18],joinStyle="MITRE",mitreLimit=3, dist=-18)
+
+
+ggplot() +
+  # geom_sf(data = shoebox$socks[18], fill = "lightskyblue3", color = "lightskyblue4") +
+  # geom_sf(data = st_minimum_rotated_rectangle(shoebox$geometry[18]),
+  #         fill = "snow1", color = "seashell4", alpha = 0.4) +
+  #
+  # geom_sf(data = shoebox$geometry[18], fill = "seashell2", color = "seashell4") +
+  #
+  geom_sf(data=ii, fill = "thistle3", color = "thistle4", alpha = 0.7) +
+  #
+  geom_sf(data=st_cast(ii, "POINT"), color = "thistle4") +
+  #
+  # geom_sf(data=st_minimum_rotated_rectangle(ii),
+  #         fill=NA, color ="darkorchid3", alpha=0.7) +
+  #
+  geom_sf(data=st_buffer(ii,joinStyle="MITRE",mitreLimit=3, dist=18),
+          fill=NA, color ="black") +
+  #
+  geom_sf(data=st_minimum_rotated_rectangle(st_buffer(ii,joinStyle="MITRE",
+                                                      mitreLimit=3, dist=18)),
+          fill=NA, color ="darkorchid4") +
+  #
+  # geom_sf(data = shoebox$turn[18], fill = "seashell2", color = "seashell4") +
+  #
+  coord_sf() +
+  theme_minimal()
+
+
+```
+
+
+
+```{r}
+
+ii<-st_buffer(shoebox$geometry[33],joinStyle="MITRE",mitreLimit=3, dist=-14)
+
+
+ggplot() +
+  geom_sf(data = shoebox$geometry[33], fill="khaki3", color="khaki4", alpha=0.3) +
+  geom_sf(data=st_buffer(ii,joinStyle="MITRE",mitreLimit=3, dist=14),
+          fill=NA, color ="lightskyblue3") +
+  # geom_sf(data=ii, fill="white", color ="lightskyblue3",alpha=0.3) +
+  geom_sf(data=st_minimum_rotated_rectangle(st_buffer(ii,joinStyle="MITRE",mitreLimit=3, dist=14)), fill=NA, color ="sienna") +
+  coord_sf() +
+  theme_minimal()
+
+
+```
+
+
+

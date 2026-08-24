@@ -1,0 +1,1793 @@
+---
+title: "sunlight_thesequel"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#library(devtools)
+library(tidyverse)
+library(sf)
+library(ggplot2)
+library(raster)
+library(viridis)
+library(suncalc)
+library(lidR)
+library(rayshader)
+# library(remotes)
+# remotes::install_github("PhanstielLab/BentoBox")
+# BiocManager::install("plotgardener")
+#library("plotgardener")
+library(lubridate)
+library(pdftools)
+library(terra)
+library(pracma)
+library(RColorBrewer)
+library(wk)
+```
+
+## R Markdown
+
+```{r}
+
+las.dir <- "C:/Users/jaria/Downloads/2015_ME_MA_lidar_Job847219/"
+file.names <- list.files(path = las.dir, pattern = "Job847219_42072_*", full.names = TRUE)
+
+campus_footprints <- st_read("C:/Users/jaria/Documents/R/Capstone-410/sds400/Campus_Building_Footprints_2020/campus_blgs_2020.shp") %>%
+  st_transform(8748)
+
+# naip <- raster::raster("C:/Users/jaria/Downloads/2016_4BandImagery_Job943597/2016_4BandImagery_J943597.tif")
+# naip_rgb <- raster::stack("C:/Users/jaria/Downloads/2016_4BandImagery_Job943597/2016_4BandImagery_J943597.tif")
+
+las7 <- lidR::readLAScatalog(file.names[7], progress = FALSE, filter = "-drop_z_below 0 -drop_z_above 350")
+lasQuad <- lidR::clip_rectangle(las7, 346242.477, 2943359.757, 347338.812, 2944438.415)
+#lasF <- lidR::filter_firstofmany(lasQuad)
+
+```
+
+## R Markdown
+
+```{r}
+
+roofQuad <- campus_footprints %>%
+  filter(OBJECTID == 116 | OBJECTID == 131 | OBJECTID == 141 | OBJECTID == 148 )
+roofQuad <- st_transform(roofQuad, st_crs(lasQuad))
+
+roofWilder <- roofQuad %>%
+  filter(OBJECTID == 116) %>%
+  dplyr::select(geometry) %>%
+  st_zm(drop = TRUE)
+
+# lasWilder <- lidR::clip_roi(lasF, roofWilder)
+# fullWilder <- lidR::clip_roi(lasQuad, roofWilder)
+# outWilder <- lidR::clip_roi(lasQuad, sf::st_minimum_rotated_rectangle(roofWilder))
+
+# plot(lasWilder, pal = viridis::magma, bg = "white")
+
+```
+
+## R Markdown
+
+```{r}
+
+quad_rgb <- raster::crop(naip_rgb, lasQuad)
+names(quad_rgb) <- c("r", "g", "b", "ir")
+
+quad_r <- rayshader::raster_to_matrix(quad_rgb$r)
+quad_g <- rayshader::raster_to_matrix(quad_rgb$g)
+quad_b <- rayshader::raster_to_matrix(quad_rgb$b)
+
+quad_array <- array(0, dim = c(nrow(quad_r), ncol(quad_r), 3))
+
+quad_array[,,1] <- quad_r/255 
+quad_array[,,2] <- quad_g/255 
+quad_array[,,3] <- quad_b/255 
+
+quad_array <- aperm(quad_array, c(2, 1, 3))
+quad_color <- scales::rescale(quad_array, to = c(0,1))
+#plot_map(quad_color)
+
+```
+
+## R Markdown
+
+```{r}
+
+quad_dtm <- lidR::rasterize_canopy(lasQuad, res = 1, algorithm = dsmtin(), pkg = "raster")
+wilder_dtm <- crop(quad_dtm, roofWilder)
+# mask(wilder_dtm, roofWilder) %>% plot()
+
+# x <- plot(fullWilder, bg = "white", size = 3)
+# add_dtm3d(x, wilder_dtm)
+
+quad_matrix <- rayshader::raster_to_matrix(quad_dtm)
+# quad_matrix2 <- t(quad_matrix)
+
+# plot_3d(quad_color, quad_matrix)
+# render_points(extent(lasWilder), 
+#               lat = unlist(fullWilder@data$Y), 
+#               long = unlist(fullWilder@data$X), 
+#               altitude = unlist(fullWilder@data$Z),
+#               size = 8, color = plotgardener::mapColors(vector = fullWilder@data$NumberOfReturns, palette = viridis::magma))
+
+# render_points(extent(lasQuad), lat = 2943561, long = 346555, altitude = 218, size = 20, color = "red")
+
+# quad_matrix %>%
+#   sphere_shade() #%>% plot_map()
+#   add_shadow(ray_shade(quad_matrix, zscale = 1), 0.5) %>% plot_map()
+
+#   add_shadow(ambient_shade(quad_matrix), 0) %>%
+#   plot_3d(quad_matrix, zscale = 1, fov = 0, theta = 135, zoom = 0.75, phi = 45, windowsize = c(1000, 800))
+# Sys.sleep(0.2)
+# render_snapshot()
+
+# h <- quad_matrix %>% ray_shade() %>% plot_map()
+# quad_matrix %>% sphere_shade() %>% plot_map()
+# quad_matrix %>% sphere_shade() %>% add_shadow(ray_shade(quad_matrix), rescale_original = FALSE) %>% plot_map()
+# r <- ray_shade(quad_matrix)
+# h <- sphere_shade(quad_matrix)
+# 
+# 
+# lamb_shade(quad_matrix) %>% plot_map()
+# ray_shade(quad_matrix) %>% plot_map()
+# sphere_shade(quad_matrix) %>% plot_map()
+# 
+# plot_3d(h, quad_matrix)
+# 
+# flight <- ymd_hms("2016-08-04 14:09:00", tz = "America/New_York")
+flight <- ymd_hms("2016-08-04 14:09:00", tz = "UTC")
+ma44 <- c(42.3251, -72.6412)  #c(346790.7, 2943899)
+light_source <- suncalc::getSunlightPosition(date = flight, lat = ma44[1], lon = ma44[2])[4:5]*180/pi
+naip_shadows <- ray_shade(quad_matrix, 
+                          sunangle = light_source$azimuth+180, 
+                          sunaltitude = light_source$altitude, 
+                          lambert = FALSE, zscale = 1, multicore = TRUE)
+ naip_shadows %>% 
+   #add_shadow(ray_shade(quad_matrix), rescale_original = FALSE) %>% 
+   plot_map()
+
+ plot_map(quad_color)
+
+```
+
+## R Markdown
+
+```{r}
+
+lasP <- segment_shapes(lasQuad, shp_plane(k = 20), "plane")
+lasHP <- segment_shapes(lasQuad, shp_hplane(k = 20), "hplane")
+lasL <- segment_shapes(lasQuad, shp_line(k = 20), "line")
+lasHL <- segment_shapes(lasQuad, shp_hline(k = 20), "hline")
+lasVL <- segment_shapes(lasQuad, shp_vline(k = 20), "vline")
+plot(lasQuad)
+plot(lasP, color = "plane")
+plot(lasHP, color = "hplane")
+plot(lasL, color = "line")
+plot(lasHL, color = "hline")
+plot(lasVL, color = "vline")
+
+```
+
+## R Markdown
+
+```{r}
+
+# gnd <- lidR::filter_ground(lasQuad)
+# plot(gnd, size = 3, bg = "white", color = "Classification")
+# 
+# gndWilder <- classify_ground(outWilder, csf(TRUE, 1, 1, time_step = 1))
+# plot(gndWilder, color = "Classification")
+
+mycsf <- csf(sloop_smooth = TRUE, class_threshold = 1.6, cloth_resolution = 1.6)
+gndWilder <- classify_ground(fullWilder, mycsf)
+
+rw <- st_minimum_rotated_rectangle(roofWilder) %>%
+  st_coordinates()
+
+las_tr <- clip_transect(gndWilder, rw[3,1:2], rw[2,1:2], width = 20, xz = TRUE) #right/parking_side
+las_tr <- clip_transect(gndWilder, rw[1,1:2], rw[2,1:2], width = 20, xz = TRUE) #front/tower_face
+las_tr <- clip_transect(gndWilder, rw[4,1:2], rw[2,1:2], width = 20, xz = TRUE) #invalid/interior
+las_tr <- clip_transect(gndWilder, rw[3,1:2], rw[4,1:2], width = 20, xz = TRUE) #back
+las_tr <- clip_transect(gndWilder, rw[1,1:2], rw[4,1:2], width = 20, xz = TRUE) #left/lawn_side
+plot(las_tr, color = "Classification")
+
+ggplot(las_tr@data, aes(X,Z, color = as.factor(Classification))) + 
+  geom_point(size = 0.5) + 
+  coord_equal() + 
+  theme_minimal()
+
+wvox <- voxel_metrics(las_tr, length(Z), 2)
+plot(wvox, bg = "white", pal = viridis::magma(20), voxel = TRUE, legend = TRUE)
+
+# ggplot(las_tr@data, aes(X, Z)) + 
+#   geom_bin2d(bins = 25) 
+
+
+```
+
+## R Markdown
+
+```{r}
+
+noiseWilder <- classify_noise(gndWilder, sor())
+plot(noiseWilder, color = "Classification", pal = viridis::magma)
+
+lidR::filter_poi(noiseWilder, Classification == 18) %>%
+  plot(color = "Intensity", pal = viridis::magma, bg = "white", size = 4)
+
+lidR::filter_poi(noiseWilder, Classification != 18) %>%
+  plot(color = "Intensity", pal = viridis::magma, bg = "white", size = 4)
+
+
+q <- st_cast(roofWilder, "LINESTRING")[2,] %>%
+  st_minimum_rotated_rectangle() %>%
+  st_coordinates()
+
+# > a <- q[c(1,4),]
+# > plot(a)
+# > plot(st_cast(roofWilder, "LINESTRING")[2,], add = TRUE)
+
+las_in <- clip_transect(noiseWilder, #lidR::filter_poi(noiseWilder, Classification != 18), 
+                        q[1,1:2], q[4,1:2], width = 20, xz = TRUE)  # best scan angle profile (left interior)
+plot(las_in, color = "Classification")
+
+
+ab2 <- nngeo::st_segments(roofWilder, progress = FALSE)
+ab2[,2] <- as.factor(1:nrow(ab2))
+plot(ab2, col = ab2$V2)
+plot(st_cast(roofWilder, "POINT"), add = TRUE)
+
+```
+
+## R Markdown
+
+```{r}
+
+wilderPath <- "C:/Users/jaria/Downloads/Floor Plans/Garden Neighborhood/Wilder House Floor Plan (Updated 2023).pdf"
+wilder1 <- pdf_convert(wilderPath, format = "tiff", pages = 1, verbose = FALSE)
+wilder1 <- raster::stack(wilder1)
+# u1_0 <- wilder1$Wilder.House.Floor.Plan..Updated.2023._1_1
+# u1_0[u1_0[] == 255] = NA
+# plot(u1_0)
+plot(wilder1$Wilder.House.Floor.Plan..Updated.2023._1_1)
+
+
+u1 <- unique(wilder1$Wilder.House.Floor.Plan..Updated.2023._1_1)
+
+u1_50 <- wilder1$Wilder.House.Floor.Plan..Updated.2023._1_1
+u1_50[u1_50[] > 50] = NA
+par(mar = c(0,0,0,0), oma = c(0,0,0,0))
+plot(u1_50, axes = FALSE, legend = FALSE, colNA = "black")
+
+u1_100 <- wilder1$Wilder.House.Floor.Plan..Updated.2023._1_1
+u1_100[u1_100[] <= 50 | u1_100[] > 100] = NA
+par(mar = c(0,0,0,0), oma = c(0,0,0,0))
+plot(u1_100, axes = FALSE, legend = FALSE, colNA = "black")
+
+u1_150 <- wilder1$Wilder.House.Floor.Plan..Updated.2023._1_1
+u1_150[u1_150[] <= 100 | u1_150[] > 150] = NA
+par(mar = c(0,0,0,0), oma = c(0,0,0,0))
+plot(u1_150, axes = FALSE, legend = FALSE, colNA = "black")
+
+u1_200 <- wilder1$Wilder.House.Floor.Plan..Updated.2023._1_1
+u1_200[u1_200[] <= 150 | u1_200[] > 200] = NA
+par(mar = c(0,0,0,0), oma = c(0,0,0,0))
+plot(u1_200, axes = FALSE, legend = FALSE, colNA = "black")
+
+u1_250 <- wilder1$Wilder.House.Floor.Plan..Updated.2023._1_1
+u1_250[u1_250[] <= 200] = NA
+# u1_250[u1_250[] <= 254] = NA
+par(mar = c(0,0,0,0), oma = c(0,0,0,0))
+plot(u1_250, axes = FALSE, legend = FALSE)
+
+u1_who <- wilder1$Wilder.House.Floor.Plan..Updated.2023._1_1
+# u1_who[u1_who[] <= 146 | u1_who[] > 147] = NA
+u1_who[u1_who[] <= 86 | u1_who[] > 90] = NA
+par(mar = c(0,0,0,0), oma = c(0,0,0,0))
+plot(u1_who, axes = FALSE, legend = FALSE, colNA = "black")
+
+ubw <- wilder1$Wilder.House.Floor.Plan..Updated.2023._1_1
+ubw[ubw[] == 255] = NA
+ubw[!is.na(ubw[])] = 1
+par(mar = c(0,0,0,0), oma = c(0,0,0,0))
+plot(ubw, col = "black", legend = FALSE, axes = FALSE)
+u1 <- unique(ubw)
+
+# wilderText <- tesseract::ocr_data(wilderPg, engine = tesseract("eng"))
+# wilderText <- pdftools::pdf_ocr_data(wilderPath, pages = 1)
+
+
+
+p <- rast("C:/Users/jaria/Documents/Wilder House Floor Plan (Updated 2023)_output_1.png")
+p1 <- terra::as.polygons(p)
+p2 <- plot(p1)
+ubwS <- rast(ubw)
+ubw1 <- terra::as.polygons(ubwS)
+ubw2 <- sf::st_as_sf(ubw1)
+ubw3 <- sf::st_cast(ubw2, "POLYGON")
+ubw4 <- ubw3 %>% mutate(size = st_area(geometry))
+hist(ubw4$size)
+
+ggplot() +
+  geom_sf(data = ubw2, fill = "white") +
+  coord_sf()
+
+ubw4 %>% 
+  filter(size > 2e4) %>%
+  ggplot() +
+  geom_sf(fill = "white") +
+  coord_sf()
+
+```
+
+## R Markdown
+
+```{r}
+
+nshad <- naip_shadows
+nshad[nshad[] != 1] = NA
+nshad[nshad[] == 1] = 0
+nshad[is.na(nshad[])] = 1
+
+#https://github.com/tylermorganwall/rayshader/blob/master/R/flipfunctions.R
+fliplr = function(x) {
+  if(length(dim(x)) == 2) {
+    x[,ncol(x):1]
+  } else {
+    x[,ncol(x):1,]
+  }
+}
+
+un <- rast(fliplr(t(nshad)))
+ext(un) <- ext(quad_dtm)
+crs(un) <- crs(quad_dtm)
+
+uuu <- rast(quad_color)
+ext(uuu) <- ext(quad_rgb)
+crs(uuu) <- crs(quad_rgb)
+# plotRGB(uuu, scale = 1)
+
+#u11 <- terra::disagg(uuu, fact = 1.97) 
+# can't disagg; need to resample
+
+```
+
+## R Markdown
+
+```{r}
+
+footID <- c(56, 57, 63, 64, 65, 67, 72, 80, 81, 83, 85, 87, 90, 94, 96, 99, 101, 103, 104, 110, 113, 116, 120, 122, 123, 124, 127, 128, 129, 130, 131, 133, 137, 141, 144, 148, 155, 156) 
+# campus_footprints$OBJECTID
+feet <- campus_footprints %>%
+  filter(OBJECTID %in% footID)
+shoe <- st_bbox(feet)
+
+#las67 <- lidR::readLAScatalog(file.names[c(6, 7)], progress = TRUE, filter = "-keep_first -drop_z_below 0 -drop_z_above 350")
+
+# lascamp <- lidR::clip_rectangle(las7, shoe[1], shoe[2], shoe[3], shoe[4])
+# las6 <- lidR::readLAScatalog(file.names[6], progress = FALSE, filter = "-drop_z_below 0 -drop_z_above 350")
+# lascampB <- lidR::clip_rectangle(las6, shoe[1], shoe[2], shoe[3], shoe[4])
+
+#plot(lascamp, pal = viridis::magma, bg = "white")
+
+# compound houses
+# c(99, 113, 116, 129, 131, 141, 148) 
+feet <- st_transform(feet, st_crs(las7)) %>% st_zm()
+# twin <- lidR::clip_roi(lascamp, feet$geometry[16])      # chase; row 31 = jordan
+#plot(twin, pal = viridis::magma, bg = "white")
+
+# only <- lidR::clip_roi(lascamp, feet$geometry[4])      #  tyler
+#plot(only, pal = viridis::magma, bg = "white")
+
+```
+
+## R Markdown
+
+```{r, message=FALSE, warning=FALSE}
+pdf.dir <- "C:/Users/jaria/Downloads/residential_floor_plans/"
+pdf.files <- list.files(path = pdf.dir, full.names = TRUE)
+
+# jpath <- "C:/Users/jaria/Downloads/Floor Plans/Paradise Neighborhood/Jordan House Floor Plan (Updated 2023).pdf"   #pdf.files[21]
+jpath <- pdf.files[8]
+
+j1 <- pdf_convert(jpath, format = "tiff", pages = 1, verbose = FALSE)
+j1 <- raster::stack(j1)
+j1 <- raster(j1, layer = 1)
+j1[j1[] == 255] = NA
+j1[!is.na(j1[])] = 1
+j1 <- rast(j1)
+
+#plot(j1)
+
+j1_vect <- terra::as.polygons(j1) %>%
+  sf::st_as_sf() %>%
+  sf::st_cast("POLYGON")
+
+# ggplot() +
+#   geom_sf(data = j1_vect, fill = "white") +
+#   coord_sf()
+
+j1_geo <- j1_vect %>% mutate(size = st_area(geometry))
+# hist(j1_geo$size)
+# max(j1_geo$size)
+
+# j1_geo %>% 
+#   filter(size > 2e4) %>%
+#   ggplot() +
+#   geom_sf(fill = "white") +
+#   geom_sf(data = st_boundary(j1_geo), color = "blue") +
+#   coord_sf()
+
+j1_blank <- j1_geo %>% filter(size > 2e4)
+
+ggplot() +
+  geom_sf(data = j1_blank, fill = "thistle", color = "mediumpurple4") +
+  # geom_sf(data = st_buffer(j1_blank, dist = 10), color = "blue") +
+  # geom_sf(data = st_boundary(st_buffer(j1_blank)), color = "red") +
+  coord_sf() +
+  theme_minimal()
+
+```
+
+
+```{r}
+jpath <- pdf.files[38]   #Washburn
+j1 <- pdf_convert(jpath, format = "tiff", pages = 1, verbose = FALSE)
+j1 <- raster::stack(j1)
+j1 <- raster(j1, layer = 1)
+# j1[j1[] != 255] = NA
+# j1[j1[] < 250] = NA
+# j1[j1[] < 200 | j1[] > 230] = NA
+j1[j1[] > 240] = NA
+plot(j1)
+
+```
+
+```{r}
+a <- list.files(path = pdf.dir, full.names = FALSE)
+aa <- as.data.frame(a)
+aa <- aa %>% dplyr::select("pdf_name" = a)
+aa <- aa %>% mutate(V1 = stringr::str_split(pdf_name, boundary("word"), simplify = T)[,1])
+aa <- aa %>% mutate(V2 = stringr::str_split(pdf_name, boundary("word"), simplify = T)[,2])
+aa <- aa %>% mutate(V = paste(V1, V2))
+```
+
+```{r}
+
+blueprints <- function (n, pg=1, rm.detail=TRUE) {
+  
+  dorm <- pdf_convert(pdf.files[n], format = "tiff", pages = pg, verbose = FALSE)
+  dorm <- raster::stack(dorm)
+  dorm <- raster(dorm, layer = 1)
+  
+  dorm[dorm[] == 255] = NA
+  #plot(dorm, main = aa[n,4])
+  dorm[!is.na(dorm[])] = 1
+  
+  dorm <- dorm %>% 
+    terra::rast() %>%
+    terra::as.polygons(dorm) %>%
+    sf::st_as_sf() %>%
+    sf::st_cast("POLYGON") %>% 
+    mutate(size = st_area(geometry)) 
+  
+  
+  if (rm.detail == TRUE) {
+    
+    dorm <- dorm %>%
+      filter(size > 2e4)
+    
+  } else {dorm <- dorm}
+  
+  
+  # ggplot() +
+  #   geom_sf(data = dorm, fill = "thistle", color = "mediumpurple4") +
+  #   coord_sf() +
+  #   theme_minimal() +
+  #   labs(title = aa[n,4])
+  
+  #assign(tolower(aa[n,2]), dorm)
+  
+  #print(paste0(toupper(aa[n,2]), " now available in Global Environment"))
+  
+}
+
+```
+
+```{r}
+
+preview <- function (n, pg=1, rm.detail=TRUE) {
+  
+  ggplot() +
+    geom_sf(data = blueprints(n, pg, rm.detail), 
+            fill = "thistle", color = "mediumpurple4") +
+    coord_sf() +
+    theme_minimal() +
+    labs(title = aa[n,4])
+  
+}
+
+```
+
+```{r, message=FALSE, warning=FALSE}
+
+albright <- blueprints(4)
+# blueprints(5)
+# blueprints(6)
+
+ggplot() +
+  geom_sf(data = albright, fill = "thistle", color = "mediumpurple4") +
+  coord_sf() +
+  theme_minimal() +
+  labs(title = aa[4,4])
+
+# for (i in length(pdf.files)) {
+#   blueprints(i)
+# }
+
+```
+
+```{r}
+
+preview(36, 2, FALSE)
+preview(36, 1, FALSE)
+# tenney2 <- blueprints(36,2,rm.detail = FALSE)
+preview(13,2)
+preview(13,1)
+
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+cushing <- blueprints(10)  #cushing
+# blueprints(13)  #emerson
+# blueprints(21)  #jordan
+
+ggplot() +
+#  geom_sf(data = cushing, fill = "white") +
+  geom_sf(data = st_buffer(st_buffer(cushing, dist = 4), -4), 
+          fill = "khaki3", color = "khaki4") +
+#  geom_sf(data = st_buffer(j2_blank, dist = 4), fill = "khaki3", color = "khaki4") +
+#  geom_sf(data = st_boundary(st_buffer(j2_blank)), color = "red") +
+#  geom_sf(data = cushing, fill = "white") +
+  coord_sf() + 
+  theme_void()
+```
+
+```{r, message=FALSE, warning=FALSE}
+
+cushing <- blueprints(10)
+emerson <- blueprints(13)
+jordan <- blueprints(21)
+
+jordan <- wk_transform(jordan, wk_affine_rotate(-90))
+cushing <- wk_transform(cushing, wk_affine_rotate(90))
+
+jordan <- wk_transform(jordan, wk_affine_scale(scale_x = 0.67, scale_y = 0.67)) #0.650043
+
+
+
+ggplot() +
+  geom_sf(data = emerson, fill = "thistle", color = "thistle4") +
+  geom_sf(data = wk_transform(cushing, wk_affine_translate(dx = 255, dy = 355)),
+          fill = "khaki3", color = "khaki4") +
+  geom_sf(data = wk_transform(jordan, wk_affine_translate(dx = 940, dy = 1162)),
+          fill = "lightskyblue3", color  = "lightskyblue4") +
+  coord_sf() +
+  theme_minimal()
+
+```
+
+```{r}
+
+cushing <- wk_transform(cushing, wk_affine_translate(dx = 255, dy = 355))
+jordan <- wk_transform(jordan, wk_affine_translate(dx = 940, dy = 1162))
+
+duplex <- st_union(emerson, cushing)
+duplex <- st_union(duplex, jordan)
+duplex <- duplex$geometry
+
+
+ggplot() +
+  # geom_sf(data = st_boundary(st_buffer(duplex, 2)), color  = "blue") +
+  # geom_sf(data = st_buffer(duplex, 2), fill = "deeppink4", color  = "deeppink4") +
+  geom_sf(data = duplex, fill = "mistyrose", color  = "hotpink4") +
+  coord_sf() +
+  theme_minimal()
+
+```
+
+```{r, warning=FALSE}
+northrop <- blueprints(27)
+gillet <- blueprints(16)
+
+# plot(northrop$geometry)
+# plot(gillet$geometry)
+# plot(shoebox$turn[shoebox$OBJECTID==113])
+
+northrop <- st_cast(northrop, "LINESTRING") %>%
+  mutate(size = st_length(geometry))
+gillet <- st_cast(gillet, "LINESTRING") %>%
+  mutate(size = st_length(geometry))
+
+ggplot() +
+  geom_sf(data = northrop, color = "dodgerblue") +
+  geom_sf(data = gillet, color = "hotpink3") +
+  coord_sf() +
+  theme_minimal()
+
+#northrop %>% 
+gillet %>%
+  # st_cast("POLYGON") %>%
+  # mutate(size = st_area(geometry)) %>%
+  # slice_max(size, n=20) %>%
+  ggplot() +
+  geom_sf(aes(color = size,)) +
+  scale_color_distiller(palette = "Spectral", na.value = "gray80") +
+  # scale_fill_distiller(palette = "Spectral", na.value = "gray80") +
+  coord_sf() +
+  theme_minimal()
+
+# preview(16)
+# preview(16,pg=2)
+
+# gillet2 <- blueprints(16, pg = 2)
+
+
+# gillet.outline <- gillet$geometry[which.max(gillet$size)]
+# 
+# bbGill <- st_as_sfc(st_bbox(gillet))
+# bbNorth <-st_as_sfc(st_bbox(northrop))
+# 
+# gapGill <- st_difference(bbGill, st_cast(gillet.outline, "POLYGON"))
+# gapGill <- st_cast(gapGill, "POLYGON")
+# 
+# g <- st_coordinates(st_centroid(gapGill))
+# matchGill <- gapGill[which.min(g[,2])]
+
+
+puzzle <- function(dorm) {
+  
+  dorm <-  st_cast(dorm, "LINESTRING") %>%
+    mutate(size = st_length(geometry))
+  
+  dorm.outline <- dorm$geometry[which.max(dorm$size)]
+  bbDorm <- st_as_sfc(st_bbox(dorm))
+  
+  gapDorm <- st_difference(bbDorm, st_cast(dorm.outline, "POLYGON"))
+  gapDorm <- st_cast(gapDorm, "POLYGON")
+  
+  g <- st_coordinates(st_centroid(gapDorm))
+  matchDorm <- gapDorm[which.min(g[,2])]
+  
+  matchDorm
+  
+}
+
+
+ggplot() +
+  # geom_sf(data = gillet, fill = "khaki1", color = "khaki3") +
+  # geom_sf(data = puzzle(gillet), fill = "khaki3", color = "khaki4") +
+  geom_sf(data = northrop, fill = "khaki1", color = "khaki3") +
+  geom_sf(data = puzzle(northrop), fill = "khaki3", color = "khaki4") +
+  coord_sf() +
+  theme_minimal()
+
+st_bbox(puzzle(gillet))
+st_bbox(puzzle(northrop))
+
+```
+
+```{r}
+chase <- blueprints(8)
+duckett <- blueprints(12)
+
+chase <- st_cast(chase, "LINESTRING") %>%
+  mutate(size = st_length(geometry))
+duckett <- st_cast(duckett, "LINESTRING") %>%
+  mutate(size = st_length(geometry))
+
+
+# option for determining blueprint's outermost linestring:
+# instead of which.max(length), which sometimes returns the outline of large and irregular shaped (ie. high edge:area ratio) indoor feature (eg. hallway), you could use purrr::map(geometry[i], st_bbox) to get the line that covers the greatest expanse
+
+chase.outline <- chase %>%
+  slice_max(size, n=1) %>%
+  st_cast("POLYGON") %>%
+  st_simplify(preserveTopology = TRUE, dTolerance = 2)
+
+
+# meet <- st_inscribed_circle(chase.outline$geometry, nQuadSegs = 2)[1]
+# meet <- st_buffer(meet, dist = 2)
+# meet2 <- st_difference(chase.outline, meet) %>%
+#   st_cast("POLYGON") %>% 
+#   mutate(size = st_area(geometry)) %>%
+#   slice_min(size, n=1)
+
+# m <- st_coordinates(meet2)[,1:2]
+# chase.A <- m[which.min(m[,2]),]
+# m <- m[m[,1] > chase.A[1],]
+# chase.B <- m[which.min(m[,1]),]
+
+# chase.A <- st_point(c(chase.A[1], chase.A[2]))
+# chase.B <- st_point(c(chase.B[1], chase.B[2]))
+
+chase.pts <- st_cast(chase.outline, "POINT")
+chase.pts$size <- 1:nrow(chase.pts)
+
+chase.A <- chase.pts$geometry[16]
+chase.B <- chase.pts$geometry[9]
+
+
+# ggplot() +
+#   geom_sf(data = meet2, fill = "honeydew3", alpha = 0.7) +
+#   geom_sf(data = st_cast(meet2, "POINT"), color = "honeydew4", size = 1) +
+#   coord_sf() +
+#   theme_minimal()
+
+
+ggplot() +
+  geom_sf(data = chase.outline, fill = "honeydew2", alpha = 0.5) +
+  geom_sf(data = chase.pts, color = "gray30", size = 3) +
+  # geom_sf(data = chase.pts, aes(color = size), size = 2.5) +
+  geom_sf(data = chase.pts[5:20,], aes(color = size), size = 2.5) +
+  scale_color_distiller(palette = "PRGn") +
+  coord_sf() +
+  theme_minimal()
+
+
+ggplot() +
+  geom_sf(data = chase.outline, fill = "honeydew2", alpha = 0.5) +
+  geom_sf(data = chase.A, color = "honeydew4", size = 3) +
+  geom_sf(data = chase.B, color = "honeydew4", size = 3) +
+  coord_sf() +
+  theme_minimal()
+
+
+```
+
+```{r}
+
+duckett.outline <- duckett %>%
+  st_cast("POLYGON") %>%
+  mutate(size = sf::st_area(geometry)) %>% 
+  slice_max(size, n=1) %>%
+  st_simplify(preserveTopology = TRUE, dTolerance = 2)
+
+# m <- st_coordinates(duckett.outline)[,1:2]
+# duckett.A <- m[which.max(m[,2]),]
+# m <- m[m[,1] > duckett.A[1],]
+# duckett.B <- m[which.max(m[,2]),]
+
+# duckett.A <- st_point(c(duckett.A[1], duckett.A[2]))
+# duckett.B <- st_point(c(duckett.B[1], duckett.B[2]))
+
+duckett.pts <- st_cast(duckett.outline, "POINT")
+duckett.pts$size <- 1:nrow(duckett.pts)
+
+
+ggplot() +
+  geom_sf(data = duckett.outline, fill = "honeydew2", alpha = 0.5) +
+  geom_sf(data = duckett.pts, color = "gray30", size = 3) +
+  # geom_sf(data = duckett.pts, aes(color = size), size = 2.5) +
+  geom_sf(data = duckett.pts[1:15,], aes(color = size), size = 2.5) +
+  scale_color_distiller(palette = "PRGn") +
+  coord_sf() +
+  theme_minimal()
+
+da = 1 
+db = 10
+
+duckett.A <- duckett.pts$geometry[da]
+duckett.B <- duckett.pts$geometry[db]
+
+ggplot() +
+  geom_sf(data = duckett.outline, fill = "honeydew2", alpha = 0.5) +
+  geom_sf(data = duckett.A, color = "honeydew4", size = 3) +
+  geom_sf(data = duckett.B, color = "honeydew4", size = 3) +
+  coord_sf() +
+  theme_minimal()
+
+```
+
+```{r}
+
+print("Chase")
+chase.A
+chase.B
+
+print("Duckett")
+duckett.A
+duckett.B
+
+
+ggplot() +
+  geom_sf(data = chase.A, color = "lightskyblue3", size = 3) +
+  geom_sf(data = chase.B, color = "lightskyblue4", size = 3) +
+  geom_sf(data = duckett.A, color = "gold1", size = 3) +
+  geom_sf(data = duckett.B, color = "gold3", size = 3) +
+  coord_sf() +
+  theme_minimal()
+
+```
+
+```
+## trying to id a more significant georef coord for alignment
+## replacing chase.B and duckett.B with an inner corner point    
+## first: see if coordinate order is consistent btwn transformations
+
+
+# w.outline <- duckett.outline    #original
+# w.outline <- duckett.wk         #scaled
+w.outline <- duckett.wk1
+# w.outline <- duckett.wk2        #final shape and position
+
+## (angle for duckett's rotation not yet corrected, 
+## but good enough for the following demo)
+
+w <- st_cast(w.outline, "POINT")
+w$size <- 1:nrow(w)
+
+ggplot() +
+  geom_sf(data = w.outline, fill = "honeydew2", alpha = 0.5) +
+  geom_sf(data = w, color = "gray30", size = 3) +
+  geom_sf(data = w, aes(color = size), size = 2.5) +
+  scale_color_distiller(palette = "PRGn") +
+  coord_sf() +
+  theme_minimal()
+
+
+
+## isolating the new georef coord for chase.B    
+w.outline <- chase.outline
+
+w <- st_cast(w.outline, "POINT")
+w$size <- 1:nrow(w)
+
+ggplot() +
+  geom_sf(data = w.outline, fill = "honeydew2", alpha = 0.5) +
+  geom_sf(data = w, color = "gray30", size = 3) +
+  geom_sf(data = w, aes(color = size), size = 2.5) +
+  # geom_sf(data = w[(w$size>10) & (w$size<30),],   #informal procedure for isolating the 
+  #         aes(color = size), size = 2.5) +        #registration coords' index number 
+  scale_color_distiller(palette = "PRGn") +
+  coord_sf() +
+  theme_minimal()
+
+
+# Duckett
+# ptA = coord[2,]      #maybe keep original coord.B for scaling purposes
+# newB = coord[8,]
+
+# Chase
+# ptA = coord[15,]    #POINT (416 330)
+# newB = coord[13,]   #POINT (476 317)
+
+```
+
+
+```{r}
+
+
+f <- st_distance(chase.A,chase.B) / st_distance(duckett.A,duckett.B)
+duckett.scaled <- wk_transform(duckett.outline, wk_affine_scale(scale_x = f, scale_y = f))
+
+
+# m <- st_coordinates(duckett.wk)[,1:2]
+# duckett.wkA <- m[which.max(m[,2]),]
+# m <- m[m[,1] > duckett.wkA[1],]
+# duckett.wkB <- m[which.max(m[,2]),]
+
+# duckett.wkA <- st_point(c(duckett.wkA[1], duckett.wkA[2]))
+# duckett.wkB <- st_point(c(duckett.wkB[1], duckett.wkB[2]))
+
+duckett.wkA <- st_cast(duckett.scaled, "POINT")$geometry[da]
+duckett.wkB <- st_cast(duckett.scaled, "POINT")$geometry[db]
+
+
+ggplot() +
+  geom_sf(data = chase.outline, fill = "lightskyblue3", alpha = 0.3) +
+  geom_sf(data = chase.A, color = "hotpink", size = 3) +
+  geom_sf(data = chase.B, color = "lightskyblue4", size = 3) +
+  # geom_sf(data = duckett.outline, fill = "gray", alpha = 0.3) +
+  geom_sf(data = duckett.scaled, fill = "gold2", alpha = 0.3) +
+  geom_sf(data = duckett.wkA, color = "hotpink", size = 3) +
+  geom_sf(data = duckett.wkB, color = "gold4", size = 3) +
+  coord_sf() +
+  theme_minimal()
+
+```
+
+
+```{r}
+
+duckett.wkA <- st_coordinates(duckett.wkA)
+duckett.wkB <- st_coordinates(duckett.wkB)
+chase.A <- st_coordinates(chase.A)
+chase.B <- st_coordinates(chase.B)
+
+d.theta <- atan((duckett.wkA[2]-duckett.wkB[2])/(duckett.wkA[1]-duckett.wkB[1]))
+c.theta <- atan((chase.B[2]-chase.A[2])/(chase.B[1]-chase.A[1])) 
+wk.theta <- -1*(d.theta-c.theta)*(180/pi)
+# wk.theta <- (-1*(d.theta-c.theta) + (pi/2)) %% (2*pi)
+# duckett.wk <- wk_transform(duckett.wk, wk_affine_rotate(wk.theta*(180/pi)))
+# duckett.wk1 <- wk_transform(duckett.wk, wk_affine_rotate(90))
+duckett.rotated <- wk_transform(duckett.scaled, wk_affine_rotate(wk.theta))
+
+# temp.wkA <- st_coordinates(duckett.wk)[2,1:2]
+# temp.wkB <- st_coordinates(duckett.wk)[8,1:2]
+# temp.chaseA <- st_coordinates(chase.outline)[13,1:2]
+# temp.chaseA <- st_coordinates(chase.outline)[15,1:2]
+# d.theta <- atan((temp.wkA[2]-temp.wkB[2])/(temp.wkA[1]-temp.wkB[1]))
+# c.theta <- atan((chase.B[2]-chase.A[2])/(chase.B[1]-chase.A[1])) 
+
+
+# m1 <- st_coordinates(duckett.wk1)[,1:2]
+# duckett.wk1A <- m1[which.min(m1[,1]),]
+# m1 <- m1[m1[,2] > duckett.wk1A[2],]
+# duckett.wk1B <- m1[which.min(m1[,1]),]
+
+# duckett.wk1A <- st_point(c(duckett.wk1A[1], duckett.wk1A[2]))
+# duckett.wk1B <- st_point(c(duckett.wk1B[1], duckett.wk1B[2]))
+
+
+duckett.wk1A <- st_cast(duckett.rotated, "POINT")$geometry[da]
+duckett.wk1B <- st_cast(duckett.rotated, "POINT")$geometry[db]
+
+chase.A <- st_point(c(chase.A[1], chase.A[2]))
+chase.B <- st_point(c(chase.B[1], chase.B[2]))
+
+
+ggplot() +
+  geom_sf(data = chase.outline, fill = "lightskyblue3", alpha = 0.3) +
+  geom_sf(data = chase.A, color = "hotpink", size = 3) +
+  geom_sf(data = chase.B, color = "lightskyblue4", size = 3) +
+  # geom_sf(data = duckett.outline, fill = "gray", alpha = 0.3) +
+  geom_sf(data = duckett.rotated, fill = "gold2", alpha = 0.3) +
+  geom_sf(data = duckett.wk1A, color = "hotpink", size = 3) +
+  geom_sf(data = duckett.wk1B, color = "gold4", size = 3) +
+  coord_sf() +
+  theme_minimal()
+
+
+```
+
+```{r}
+
+# translation to match point chase.A and the transformed duckett.A
+# using st_overlap(chase.B, duckett.B) to confirm fit
+
+duckett.wk1A <- st_coordinates(duckett.wk1A)
+duckett.wk1B <- st_coordinates(duckett.wk1B)
+chase.A <- st_coordinates(chase.A)
+chase.B <- st_coordinates(chase.B)
+
+duckett.done <- wk_transform(duckett.rotated, wk_affine_translate(
+  dx = (chase.A[1]-duckett.wk1A[1]), 
+  dy = (chase.A[2]-duckett.wk1A[2])))
+
+
+# m2 <- st_coordinates(duckett.wk2)[,1:2]
+# duckett.wk2A <- m2[which.min(m2[,1]),]
+# m2 <- m2[m2[,2] > duckett.wk2A[2],]
+# duckett.wk2B <- m2[which.min(m2[,1]),]
+
+# duckett.wk2A <- st_point(c(duckett.wk2A[1], duckett.wk2A[2]))
+# duckett.wk2B <- st_point(c(duckett.wk2B[1], duckett.wk2B[2]))
+
+duckett.wk2A <- st_cast(duckett.done, "POINT")$geometry[da]
+duckett.wk2B <- st_cast(duckett.done, "POINT")$geometry[db]
+
+chase.A <- st_point(c(chase.A[1], chase.A[2]))
+chase.B <- st_point(c(chase.B[1], chase.B[2]))
+
+
+ggplot() +
+  geom_sf(data = chase.outline, fill = "lightskyblue3", alpha = 0.3) +
+  geom_sf(data = chase.A, color = "hotpink", size = 3) +
+  geom_sf(data = chase.B, color = "lightskyblue4", size = 3) +
+  # geom_sf(data = duckett.outline, fill = "gray", alpha = 0.3) +
+  geom_sf(data = duckett.done, fill = "gold2", alpha = 0.3) +
+  geom_sf(data = duckett.wk2A, color = "hotpink", size = 3) +
+  geom_sf(data = duckett.wk2B, color = "gold4", size = 3) +
+  coord_sf() +
+  theme_minimal()
+
+# ggplot() +
+#   geom_sf(data = wk_transform(shoebox$turn[16], wk_affine_rotate(84)), 
+#           fill = "lightskyblue3", color = "lightskyblue4", alpha = 0.3) +
+#   coord_sf() +
+#   theme_minimal()
+```
+
+
+
+```
+
+# Chase/Duckett = 0.9613661
+# > st_distance(chase.A,chase.B)
+# > [1,] 74.24958
+# > st_distance(duckett.A,duckett.B)
+# > [1,] 77.23341
+
+f <- st_distance(chase.A,chase.B) / st_distance(duckett.A,duckett.B)
+duckett.wk <- wk_transform(duckett.outline, wk_affine_scale(scale_x = f, scale_y = f))
+
+
+m <- st_coordinates(duckett.wk)[,1:2]
+m <- m[order(m[,2], decreasing = TRUE),]
+duckett.wkB <- m[1,]
+m <- m[m[,2] != duckett.wkB[2],]
+duckett.wkA <- m[1,]
+
+duckett.wkA <- st_point(c(duckett.wkA[1], duckett.wkA[2]))
+duckett.wkB <- st_point(c(duckett.wkB[1], duckett.wkB[2]))
+
+
+
+# Slope (ie. 'rise over run')                    
+# = (duckett.wkB[2]-duckett.wkA[2])/(duckett.wkB[1]-duckett.wkA[1])
+
+# (vertical distance) / (horizontal distance)
+#         (B[2]-A[2]) / (B[1]-A[1])
+
+# relative to the lowest point
+# theta, in this case, is to the left of the right angle
+# (note the positive slope)
+
+#         (B[2]-A[2]) / (B[1]-A[1])
+#            opposite / adjacent
+
+# theta = atan(slope)
+
+# Chase         53/52       = 1.019231    0.7949
+# Duckett       58/51       = 1.137255    0.8495
+# Duckett.WK    55.8/49.0   = 1.137255    atan(^)
+
+# degree of rotation needed for matching:
+# diff btwn angles = (atan(58/51))-(atan(53/52))
+# note: atan() returns angles in radians
+#       wk_affine_rotation() requires degrees
+#       radians to degrees = atan() * (180/pi)
+
+d.theta <- atan((duckett.wkB[2]-duckett.wkA[2])/(duckett.wkB[1]-duckett.wkA[1]))
+c.theta <- atan((chase.B[2]-chase.A[2])/(chase.B[1]-chase.A[1])) 
+duckett.wk1 <- wk_transform(duckett.wk, wk_affine_rotate((d.theta-c.theta) * (180/pi)))
+
+
+m <- st_coordinates(duckett.wk1)[,1:2]
+m <- m[order(m[,2], decreasing = TRUE),]
+duckett.wk1B <- m[1,]
+m <- m[m[,2] != duckett.wk1B[2],]
+duckett.wk1A <- m[1,]
+
+duckett.wk1A <- st_point(c(duckett.wk1A[1], duckett.wk1A[2]))
+duckett.wk1B <- st_point(c(duckett.wk1B[1], duckett.wk1B[2]))
+
+
+# translation to match point chase.A and the transformed duckett.A
+# using st_overlap(chase.B, duckett.B) to confirm fit
+
+duckett.wk <- wk_transform(duckett.wk, wk_affine_translate(
+  dx = (chase.A[1]-duckett.wkA[1]), 
+  dy = (chase.A[2]-duckett.wkA[2])))
+
+
+m <- st_coordinates(duckett.wk)[,1:2]
+m <- m[order(m[,2], decreasing = TRUE),]
+duckett.wkB <- m[1,]
+m <- m[m[,2] != duckett.wkB[2],]
+duckett.wkA <- m[1,]
+
+duckett.wkA <- st_point(c(duckett.wkA[1], duckett.wkA[2]))
+duckett.wkB <- st_point(c(duckett.wkB[1], duckett.wkB[2]))
+
+
+
+ggplot() +
+  geom_sf(data = chase.outline, fill = "lightskyblue3", alpha = 0.3) +
+  # geom_sf(data = chase.A, color = "lightskyblue4", size = 3) +
+  # geom_sf(data = chase.B, color = "lightskyblue4", size = 3) +
+  # geom_sf(data = duckett.outline, fill = "gold2", alpha = 0.5) +
+  geom_sf(data = duckett.wk, fill = "gray", alpha = 0.3) +
+  geom_sf(data = duckett.wkA, color = "gray65", size = 3) +
+  geom_sf(data = duckett.wkB, color = "gray65", size = 3) +
+  geom_sf(data = duckett.wk1, fill = "gold2", alpha = 0.3) +
+  geom_sf(data = duckett.wk1A, color = "gold4", size = 3) +
+  geom_sf(data = duckett.wk1B, color = "gold4", size = 3) +
+  coord_sf() +
+  theme_minimal()
+
+```
+
+
+```
+cush.outline <- cushing %>%
+  st_cast("LINESTRING") %>%
+  mutate(size = st_length(geometry)) %>%
+  slice_max(size, n=1) %>%
+  st_cast("POLYGON")
+
+ggplot() +
+  geom_sf(data = cush.outline, fill = "cadetblue") +
+#  geom_sf(data = st_buffer(em.outline, 8), fill = "antiquewhite2") +
+#  geom_sf(data = st_buffer(st_buffer(cush.outline, 8), -8), fill = "antiquewhite3") +
+#  geom_sf(data = st_buffer(st_buffer(em.outline, -20), 20), fill = "antiquewhite3") +
+  geom_sf(data = cushing, fill = "white") +
+  coord_sf() +
+  theme_minimal()
+
+# em.seg <- nngeo::st_segments(em.outline, progress = FALSE)
+# em.seg$id <- as.factor(1:nrow(em.seg))
+# em.seg <- em.seg[3:4]
+# plot(em.outline$geometry)
+# plot(em.seg, lwd = 2)
+```
+
+```
+# feet %>%  mutate(shoebox_XMIN = st_bbox(geometry)$xmin)
+# st_bbox(feet$geometry[2])
+ 
+### https://stackoverflow.com/questions/54696440/create-polygons-representing-bounding-boxes-for-subgroups-using-sf
+# https://gis.stackexchange.com/questions/206929/r-create-a-boundingbox-convert-to-polygon-class-and-plot
+
+ggplot() +
+  geom_sf(data = st_as_sfc(st_bbox(sf::st_minimum_rotated_rectangle(t))), fill = "honeydew3") +
+  geom_sf(data = st_as_sfc(st_bbox(t)), fill = "khaki") +
+  geom_sf(data = sf::st_minimum_rotated_rectangle(t), fill = "lightblue4") +
+  geom_sf(data = t, fill = "white") +
+  coord_sf() +
+  theme_minimal()
+
+
+bbox_wrap <- function(x) st_as_sfc(st_bbox(x))
+
+shoebox <- feet %>%
+  dplyr::select(OBJECTID, geometry) %>%
+  mutate(shoes = purrr::map(geometry, bbox_wrap)) %>% 
+  mutate(shoes = st_as_sfc(do.call(rbind, shoes))) %>%
+  mutate(socks = purrr::map(geometry, st_minimum_rotated_rectangle)) %>%
+  mutate(socks = st_as_sfc(socks))
+
+st_crs(shoebox$shoes) <- st_crs(shoebox$geometry)
+st_crs(shoebox$socks) <- st_crs(shoebox$geometry)
+
+#plot(shoebox$socks)
+
+shoebox$maj.axis <- NA
+shoebox$bearing <- NA
+
+for (i in 1:nrow(shoebox)) {
+
+  n <- nngeo::st_segments(shoebox$socks[i], progress = FALSE)
+  n1 <- st_length(n[1])
+  n2 <- st_length(n[2])
+  
+  if (n1 > n2) {
+    shoebox$maj.axis[i] <- n[1]
+    n <- n[1]
+  } else {
+    shoebox$maj.axis[i] <- n[2]
+    n <- n[2]
+  }
+  
+  #shoebox$bearing[i] <- geosphere::bearing(st_coordinates(n)[,1:2])
+    
+}
+
+shoebox$maj.axis <- st_as_sfc(shoebox$maj.axis)
+st_crs(shoebox$maj.axis) <- st_crs(shoebox$geometry)
+
+ggplot() +
+  # geom_sf(data = st_as_sfc(st_bbox(shoebox$socks)), fill = "honeydew3") +
+  geom_sf(data = shoebox$shoes, fill = "khaki") +
+  geom_sf(data = shoebox$socks, fill = "lightblue4") +
+  geom_sf(data = shoebox$geometry, fill = "white") +
+  coord_sf() +
+  theme_minimal()
+
+```
+
+```{r}
+# feet %>%  mutate(shoebox_XMIN = st_bbox(geometry)$xmin)
+# st_bbox(feet$geometry[2])
+ 
+### https://stackoverflow.com/questions/54696440/create-polygons-representing-bounding-boxes-for-subgroups-using-sf
+
+bbox_wrap <- function(x) st_as_sfc(st_bbox(x))
+
+shoebox <- feet %>%
+  dplyr::select(OBJECTID, geometry) %>%
+  mutate(shoes = purrr::map(geometry, bbox_wrap)) %>% 
+  mutate(shoes = st_as_sfc(do.call(rbind, shoes))) %>%
+  mutate(socks = purrr::map(geometry, st_minimum_rotated_rectangle)) %>%
+  mutate(socks = st_as_sfc(socks))
+
+st_crs(shoebox$shoes) <- st_crs(shoebox$geometry)
+st_crs(shoebox$socks) <- st_crs(shoebox$geometry)
+
+
+# https://r-spatial.github.io/sf/articles/sf3.html
+
+rot = function(a) matrix(c(cos(a), sin(a), -sin(a), cos(a)), 2, 2)
+
+
+#https://math.stackexchange.com/questions/1589793/a-formula-to-convert-a-counter-clockwise-angle-to-clockwise-angle-with-an-offset#:~:text=If%20%CE%B8%20is%20your%20original,the%20offset%20of%20ninety%20degrees.
+
+shoebox$bearing <- NA
+shoebox$turn <- NA
+
+for (i in 1:nrow(shoebox)) {
+
+  n <- st_coordinates(shoebox$socks[i])[1:4,1:2]
+  n <- n[order(n[,2])[1:2],]
+  
+  b <- atan((n[2,2] - n[1,2]) / abs(n[1,1] - n[2,1]))
+ 
+  if (n[2,1] < n[1.1]) {
+    b <- (-b+(pi/2))%%(2*pi)
+  } else { b <- b }
+
+  shoebox$bearing[i] <- b
+  
+  cntrd <- st_centroid(shoebox$geometry[i])
+  
+  shoebox$turn[i] <- (shoebox$geometry[i] - cntrd) * rot(b) + cntrd
+  
+}
+
+shoebox$turn <- st_as_sfc(shoebox$turn)
+st_crs(shoebox$turn) <- st_crs(shoebox$geometry)
+
+# plot(shoebox$turn[1])
+# plot(shoebox$turn[16])
+# plot(shoebox$geometry[16])
+# plot(shoebox$turn[38])
+
+
+ggplot() +
+  # geom_sf(data = shoebox$shoes, fill = "khaki") +
+  geom_sf(data = shoebox$socks, fill = "snow1", color = "seashell3") +
+  geom_sf(data = shoebox$geometry, fill = "seashell2", color = "seashell4") +
+  geom_sf(data = shoebox$turn, fill = "lightskyblue3", color = "lightskyblue4") +
+  coord_sf() +
+  theme_minimal()
+
+
+ggplot() +
+  geom_sf(data = shoebox$socks[16], fill = "lightskyblue3", color = "lightskyblue4") +
+  geom_sf(data = st_as_sfc(st_bbox(shoebox$turn[16])),
+          fill = "snow1", color = "seashell3", alpha = 0.4) +
+  geom_sf(data = shoebox$turn[16], fill = "seashell2", color = "seashell4") +
+  coord_sf() +
+  theme_minimal()
+
+```
+
+```{r}
+tenney.ft <- feet$geometry[30]
+st_crs(tenney.ft) = NA
+#tenney.ft <- wk_transform(tenney.ft, wk_affine_scale(scale_x = 10e-4, scale_y = 10e-4)) 
+
+# ggplot() +
+#   geom_sf(data = feet$geometry[30], fill = "plum4") +
+#   coord_sf() +
+#   theme_void()
+#   
+# ggplot() +
+#   geom_sf(data = tenney.ft, fill = "plum4") +
+#   coord_sf() +
+#   theme_void()
+
+ggplot() +
+  geom_sf(data = tenney.ft, fill = "plum4") +
+  geom_sf(data = tenney2$geometry, fill = "thistle") +
+  coord_sf() +
+  theme_minimal()
+
+hist(tenney2$size)
+#hist(tenney2$size[tenney2$size<5000])
+tenney.ft <- tenney2[tenney2$size>5000,]
+plot(tenney.ft$geometry)  #, col = tenney.ft$size)
+
+#tenney.ft <- 
+tenney.ft %>%
+  st_cast("LINESTRING") %>%
+  mutate(size = st_length(geometry)) %>%
+#  slice_max(size, n=1) %>%
+#  st_cast("POLYGON") %>%
+  ggplot() +
+  geom_sf(aes(color = size)) +
+  scale_color_distiller(palette = "Spectral", na.value = "gray80") +
+  coord_sf() +
+  theme_minimal()
+
+
+```
+
+```{r}
+
+#preview(24)
+blueprints(17) %>%
+  st_cast("LINESTRING") %>%
+  mutate(size = st_length(geometry)) %>%
+  ggplot() +
+  geom_sf(aes(color = size)) +
+  scale_color_distiller(palette = "Spectral", na.value = "gray80") +
+  coord_sf() +
+  theme_minimal() +
+  labs(title = aa[1,4])
+
+
+```
+
+```{r}
+
+cell255 <- function (n, pg=1) {
+  
+  dorm <- pdf_convert(pdf.files[n], format = "tiff", pages = pg, verbose = FALSE)
+  dorm <- raster::stack(dorm)
+  dorm <- raster(dorm, layer = 1)
+  
+  dorm[dorm[] == 255] = NA
+  cell.values <- raster::getValues(dorm)
+  cell.values <- as.data.frame(cell.values)
+  #plot(dorm, main = aa[n,4])
+  
+}
+
+a <- cell255(2)
+a %>%
+  group_by(cell.values) %>%
+  summarise(N = n()) %>%
+  arrange(desc(N)) %>%
+  filter(N < 2500) %>%
+  ggplot() +
+  geom_point(aes(cell.values, N))
+ 
+dorm <- pdf_convert(pdf.files[2], format = "tiff", pages = 1, verbose = FALSE)
+dorm <- raster::stack(dorm)
+dorm <- raster(dorm, layer = 1)
+  
+dorm[dorm[] == 255] = NA
+dorm[dorm[] >= 200] = NA
+#dorm[dorm[] != 149] = NA
+
+plot(dorm, main = aa[2,4])
+
+```
+
+
+```{r}
+jpath <- pdf.files[21]
+
+j2 <- pdf_convert(jpath, format = "tiff", pages = 2, verbose = FALSE)
+j2 <- raster::stack(j2)
+j2 <- j2$Jordan.House.Floor.Plan..Updated.2023._2_1
+j2[j2[] == 255] = NA
+j2[!is.na(j2[])] = 1
+# plot(j2)
+
+j2 <- rast(j2)
+j2_vect <- terra::as.polygons(j2) %>%
+  sf::st_as_sf() %>%
+  sf::st_cast("POLYGON")
+
+ggplot() +
+  geom_sf(data = j2_vect, fill = "white") +
+  coord_sf()
+
+j2_geo <- j2_vect %>% mutate(size = st_area(geometry))
+# hist(j2_geo$size)
+# max(j2_geo$size)
+
+j2_geo %>% 
+  filter(size > 2e4) %>%
+  ggplot() +
+  geom_sf(fill = "white") +
+  coord_sf()
+
+j2_blank <- j2_geo %>% filter(size > 2e4)
+
+# ^^ EXTENT OF THE CUURENT blueprints() FUNCTION
+
+ggplot() +
+  geom_sf(data = st_buffer(j2_blank, dist = 4), fill = "khaki3", color = "khaki4") +
+#  geom_sf(data = st_buffer(st_buffer(j2_blank, dist = 4), -4)) +
+#  geom_sf(data = st_boundary(st_buffer(j2_blank)), color = "red") +
+#  geom_sf(data = j2_blank, fill = "white") +
+  coord_sf() + 
+  theme_void()
+
+
+ggplot() +
+  geom_sf(data = j1_vect, fill = "red") +
+  geom_sf(data = j2_vect, fill = "blue") +
+  coord_sf()
+
+
+
+j2_wk <- wk_transform(j2_blank, wk_affine_scale(scale_x = 1.135742, scale_y = 1.135742))
+j2_wk <- wk_transform(j2_wk, wk_affine_translate(dx = -6, dy = -79))
+# j2_wk <- wk_transform(j2_wk, wk_affine_rotate(-90))
+
+# (to normalize floors in a single floor_plan.pdf):
+
+# explanation for << scale_xy = 1.125742 >>
+# > st_bbox(j1_blank)
+#   xmin ymin xmax ymax 
+#     28  315 1191  714 
+# > 1191-28
+#   [1] 1163
+# > st_bbox(j2_blank)
+#   xmin ymin xmax ymax 
+#     39  266 1063  651 
+# > 1063-39
+#   [1] 1024
+# > 1163/1024
+#   [1] 1.135742
+
+
+ggplot() +
+  geom_sf(data = j1_blank, fill = "red") +
+  geom_sf(data = j2_wk, fill = "blue") +
+  coord_sf()
+
+
+# alternative method of getting scale factor 
+# - get diameter of an inscribed circle that spans trunk of the building  
+j2_line <- j2_wk
+j2_line <- st_cast(j2_line, "LINESTRING")
+j2_line$size <- st_length(j2_line$geometry)
+
+# ggplot() +
+#   geom_sf(data = j2_line$geometry[which.max(j2_line$size)], color = "royalblue") +
+#   coord_sf()
+
+j2_line <- j2_line[order(j2_line$size, decreasing = TRUE),]
+
+ggplot() +
+  geom_sf(data = j2_line$geometry[2], color = "royalblue") +
+#  geom_sf(data = j1_blank, fill = "gold") +
+  coord_sf()
+
+ggplot() +
+  geom_sf(data = j2_line$geometry[2], color = "royalblue") +
+# geom_sf(data = st_inscribed_circle(st_cast(j2_line$geometry[2], "POLYGON"), dTolerance = 15)) +
+  geom_sf(data = st_inscribed_circle(st_cast(j2_line$geometry[2], "POLYGON"))) +
+  geom_sf(data = st_inscribed_circle(st_cast(j2_line$geometry[2], "POLYGON"), nQuadSegs = 0)) +
+  geom_sf(data = st_centroid(st_inscribed_circle(st_cast(j2_line$geometry[2], "POLYGON")))) +
+  coord_sf()
+
+```
+
+```{r}
+# alternative method of getting scale factor 
+# - get diameter of an inscribed circle that spans trunk of the building  
+j1_line <- st_cast(j1_blank, "LINESTRING")
+j1_line$size <- st_length(j1_line$geometry)
+
+ggplot() +
+  geom_sf(data = j1_line$geometry[which.max(j1_line$size)], color = "royalblue") +
+  coord_sf()
+
+j1_line <- j1_line[order(j1_line$size, decreasing = TRUE),]
+
+ggplot() +
+  geom_sf(data = j1_line$geometry[1], color = "royalblue") +
+#  geom_sf(data = j2_blank, fill = "gold") +
+  coord_sf()
+
+ggplot() +
+  geom_sf(data = j1_line$geometry[1], color = "royalblue") +
+  geom_sf(data = st_inscribed_circle(st_cast(j1_line$geometry[1], "POLYGON"))) +
+  coord_sf()
+
+j1_radius <- st_inscribed_circle(st_cast(j1_line$geometry[1], "POLYGON"))
+
+```
+
+
+```
+for (i in 1:pdf_info(jpath)$pages) {
+
+#house_str <- paste0(filename, i)
+#assign(paste0(filename, i), pdf_convert(jpath, format = "tiff", pages = i, verbose = FALSE))
+  house <- jpath_str
+  assign(house, pdf_convert(jpath, format = "tiff", pages = i, verbose = FALSE))
+  house <- raster::stack(house)
+  house <- raster(house, layer = 1)
+  house[house[] == 255] = NA
+  house[!is.na(house[])] = 1
+  house <- rast(house)
+}
+```
+
+
+## R Markdown
+
+```{r}
+
+#lidR::filter_poi(lasQuad, NumberOfReturns > 2 & Intensity < 10000) %>%
+plot(color = "Intensity", pal = viridis::magma, bg = "white", size = 4)
+plot(lasQuad, color = "NumberOfReturns", pal = viridis::magma, bg = "white", size = 4)
+
+lidR::filter_poi(lasQuad, ReturnNumber == 1) %>%
+  plot(color = "NumberOfReturns", pal = viridis::magma, bg = "white", size = 4)
+
+lidR::filter_duplicates(lasQuad) %>%
+  plot(color = "NumberOfReturns", pal = viridis::magma, bg = "white", size = 4)
+
+qnoise <- lidR::classify_noise(lasQuad, sor(k = 10, m = 3, quantile = FALSE)) 
+lidR::filter_poi(qnoise, Classification != LASNOISE) %>%
+  plot(color = "NumberOfReturns", pal = viridis::magma, bg = "white", size = 4)
+
+```
+
+## R Markdown
+
+```{r}
+
+# Ground Classification
+mycsf <- csf(sloop_smooth = TRUE, class_threshold = 1.6, cloth_resolution = 1.6)
+
+lascamp2 <- classify_ground(lascamp, mycsf)
+# plot(lascamp2, color = "Classification", size = 3, bg = "white") 
+
+lascampB2 <- classify_ground(lascampB, mycsf)
+# plot(lascampB2, color = "Classification", size = 3, bg = "white") 
+
+# lidR::filter_poi(lascamp2, Classification != 2) %>%
+#   plot(color = "NumberOfReturns", pal = viridis::magma, bg = "white", size = 2)
+# 
+# lidR::filter_poi(lascamp2, Classification != 2 & NumberOfReturns == 1) %>%
+#   plot(color = "Intensity", pal = viridis::magma, bg = "white", size = 2)
+
+
+# lidR, 8. Derived Metrics
+
+M <- lidR::point_eigenvalues(lascampB2, k = 25, filter = ~Classification != 2, metrics = TRUE)
+W <- lidR::point_eigenvalues(lascamp2, k = 25, filter = ~Classification != 2, metrics = TRUE)
+
+lascampB2 <- add_attribute(lascampB2, FALSE, "sphericity")
+lascampB2 <- add_attribute(lascampB2, FALSE, "anisotropy")
+lascampB2$sphericity[M$pointID] <- M$sphericity
+lascampB2$anisotropy[M$pointID] <- M$anisotropy
+
+
+lascamp2 <- add_attribute(lascamp2, FALSE, "sphericity")
+lascamp2 <- add_attribute(lascamp2, FALSE, "anisotropy")
+lascamp2$sphericity[W$pointID] <- W$sphericity
+lascamp2$anisotropy[W$pointID] <- W$anisotropy
+
+
+# lampB <- lidR::merge_spatial(lascampB2, feet, "dorm") %>%
+#   filter_poi(Classification != 2)
+# lampB2 <- filter_poi(lampB, dorm == TRUE)
+# plot(lampB, color = "anisotropy", pal = viridis::magma, bg = "white")
+
+```
+
+## R Markdown
+
+```{r}
+
+# hist(lascampB2$anisotropy[(lascampB2$Classification != 2) &
+#                             (lascampB2$anisotropy > 0.6)])
+lidR::filter_poi(lascampB2, Classification != 2 & anisotropy > 0.7) %>% 
+  plot(color = "anisotropy", pal = viridis::magma, bg = "white", legend = TRUE, size = 2)
+
+# hist(lascampB2$sphericity[(lascampB2$Classification != 2) &
+#                             (lascampB2$sphericity < 0.2)])
+lidR::filter_poi(lascampB2, Classification != 2 & sphericity < 0.2) %>% 
+  plot(color = "sphericity", pal = viridis::magma, bg = "white", legend = TRUE, size = 2)
+
+# hist(lascamp2$anisotropy[(lascamp2$Classification != 2) &
+#                             (lascamp2$anisotropy > 0.6)])
+lidR::filter_poi(lascamp2, Classification != 2 & anisotropy > 0.7) %>% 
+  plot(color = "anisotropy", pal = viridis::magma, bg = "white", legend = TRUE, size = 2)
+
+# hist(lascamp2$sphericity[(lascamp2$Classification != 2) &
+#                             (lascamp2$sphericity < 0.4)])
+lidR::filter_poi(lascamp2, Classification != 2 & sphericity < 0.25) %>% 
+  plot(color = "sphericity", pal = viridis::magma, bg = "white", legend = TRUE, size = 2)
+
+```
+
+## R Markdown
+
+```{r}
+# M$omnivariance <- (M[,2]*M[,3]*M[,4])^(1/3)
+M$eigentropy <- (-1*M[,2]*log(M[,2])) + (-1*M[,3]*log(M[,3])) + (-1*M[,4]*log(M[,4])) 
+lascampB2 <- add_attribute(lascampB2, NA, "eigentropy")
+lascampB2$eigentropy[M$pointID] <- M$eigentropy
+# lidR::filter_poi(lascampB2, Classification != 2 & eigentropy > -10) %>% 
+#   plot(color = "eigentropy", pal = viridis::magma, bg = "white", legend = TRUE, size = 2)
+
+
+lascampB2 <- add_attribute(lascampB2, NA, "lambda1")
+lascampB2 <- add_attribute(lascampB2, NA, "lambda3")
+lascampB2$lambda1[M$pointID] <- M$eigen_largest
+lascampB2$lambda3[M$pointID] <- M$eigen_smallest
+
+lidR::filter_poi(lascampB2, Classification != 2 & lambda1 < 5) %>% 
+  plot(color = "lambda1", pal = viridis::magma, bg = "white", legend = TRUE, size = 2)
+
+lidR::filter_poi(lascampB2, Classification != 2 & lambda3 < 1) %>% 
+  plot(color = "lambda3", pal = viridis::magma, bg = "white", legend = TRUE, size = 2)
+
+# mm <- lidR::point_eigenvalues(lascampB2, k = 25, filter = ~Classification != 2, metrics = FALSE)
+
+```
+
+## R Markdown
+
+```{r}
+
+pixB2A <- lascampB2 %>%
+  filter_poi(Classification != 2) %>%
+  pixel_metrics(~mean(anisotropy), res = 5)
+
+pix2A <- lascamp2 %>%
+  filter_poi(Classification != 2 & anisotropy > 0.7) %>%
+  pixel_metrics(~mean(anisotropy), res = 5)
+
+pixB2A[pixB2A < 0.75] = NA
+# lidR::plot(pixB2A)
+
+pixB2N <- lascampB2 %>%
+  filter_poi(Classification != 2) %>%
+  pixel_metrics(~length(Z), res = 5)
+
+pix2N <- lascamp2 %>%
+  filter_poi(Classification != 2) %>%
+  pixel_metrics(~length(Z), res = 5)
+
+pixB2N[pixB2N > 100] = NA
+# lidR::plot(pixB2N)
+
+```
+
+## R Markdown
+
+```{r}
+
+# feet[16] = chase;  feet[31] = jordan;  feet[6] = tyler
+west_dtm <- lidR::rasterize_canopy(lascamp, res = 1, algorithm = dsmtin(), pkg = "raster")
+east_dtm <- lidR::rasterize_canopy(lascampB, res = 1, algorithm = dsmtin(), pkg = "raster")
+
+roofJordan <- st_as_sf(feet$geometry[31]) %>% st_zm(drop = TRUE)
+roofChase <- st_as_sf(feet$geometry[16]) %>% st_zm(drop = TRUE)
+roofTyler <- st_as_sf(feet$geometry[6]) %>% st_zm(drop = TRUE)
+
+jordan_dtm <- crop(west_dtm, roofJordan) #%>% mask(feet$geometry[31])
+chase_dtm <- crop(east_dtm, roofChase) #%>% mask(feet$geometry[16])
+
+col <- height.colors(25)
+# plot(jordan_dtm, col = col)
+# plot(chase_dtm, col = col)
+
+lasJordan <- lidR::clip_roi(lascamp, roofJordan)
+lasChase <- lidR::clip_roi(lascampB, roofChase)
+
+# hist(lasJordan$Z)
+# hist(lasChase$Z)
+
+# plot(lasJordan, pal = viridis::magma, bg = "white", legend = TRUE, size = 2)
+
+
+# x = unique(lasJordan$PointSourceID)   # only 4 distinct
+# head(lasJordan$PointSourceID)         # > [1] 607 607 ...
+# so, reassigning UIDs to 1:npoints(lasJordan), for joining to ggJ categories
+lasJordan$PointSourceID <- seq.int(nrow(lasJordan))
+
+ggJ <- as.data.frame(cbind(pointID = lasJordan$PointSourceID, Z = lasJordan$Z))
+
+# ggJ %>%
+#   mutate(Z = round(Z)) %>%
+#   group_by(Z) %>%
+#   summarise(N = n()) %>%
+#   ggplot(aes(Z, N)) +
+#   geom_point(color = "darkorange", size = 3) +
+#   geom_line(color = "darkorange2") +
+#   theme_minimal()
+
+hist(ggJ$Z)
+                                #temp: lasJordan <- clip(lascampB, roofChase)
+ggJ <- ggJ %>%                  #these numbers (Z) are for Chase
+  mutate(Zfoot = round(Z)) %>%
+  mutate(story = ifelse(Zfoot >= 194 & Zfoot <= 204, 1, NA)) %>%
+  mutate(story = ifelse(Zfoot >= 205 & Zfoot <= 215, 2, story)) %>%
+  mutate(story = ifelse(Zfoot >= 216 & Zfoot <= 224, 3, story)) %>%
+  mutate(story = ifelse(Zfoot >= 225 & Zfoot <= 236, 4, story))
+
+ggJ %>%
+  group_by(Zfoot, story) %>%
+  summarise(N = n()) %>%
+  ggplot(aes(Zfoot, N)) +
+  geom_line(color = "gray30") +
+  geom_point(aes(color = as.factor(story)), size = 2) +
+  scale_color_brewer(palette = "Set1", na.value = "gray80") +
+  theme_minimal()
+
+lasJordan <- add_attribute(lasJordan, NA, "story")
+lasJordan$story[ggJ$pointID] <- ggJ$story
+
+
+# jvox <- voxel_metrics(lasJordan, length(Z), 4)
+# hist(jvox$V1)
+# nrow(jvox[jvox$V1 > 20])
+# jvox <- jvox %>% filter(V1 < 30)
+# plot(jvox, bg = "white", pal = viridis::magma(20), voxel = TRUE, legend = TRUE, axis = TRUE)
+
+# x <- plot(lasJordan, bg = "white", pal = viridis::magma(20), size = 3)
+# add_dtm3d(x, jordan_dtm)
+
+filter_poi(lasJordan, Z > 220 & Z < 240) %>%
+  plot(bg = "white", pal = viridis::magma(20), size = 3)
+
+plot(lasJordan, bg = "white", color = "story", 
+     pal = RColorBrewer::brewer.pal(4, 'Set1'), size = 3)
+
+```
+
+```{r}
+ggplot() +
+  geom_sf(data = st_make_grid(st_bbox(lascamp), n = 1), alpha = 0.5,
+          fill = "lightsteelblue2", color = "lightskyblue4", size = 2) +
+  geom_sf(data = st_make_grid(st_bbox(lascampB), n = 1), alpha = 0.5,
+          fill = "lemonchiffon3", color = "lemonchiffon4", size = 2) +
+  geom_sf(data = feet, fill = "hotpink4", color = "white") +
+  coord_sf()
+```
+
+
+
+```{r}
+# filter_duplicates(lasJordan) %>%
+#   plot(bg = "white", pal = viridis::magma(20), size = 3)
+
+jnoise <- lidR::classify_noise(lasJordan, sor(k = 10, m = 3, quantile = FALSE)) 
+lidR::filter_poi(jnoise, Classification != LASNOISE) %>%
+  plot(bg = "white", pal = viridis::magma(20), size = 3)
+
+lidR::npoints(lasJordan)
+lidR::npoints(filter_duplicates(lasJordan))
+lidR::npoints(filter_poi(jnoise, Classification == LASNOISE))
+lidR::npoints(filter_poi(jnoise, Classification != LASNOISE))
+
+```
+
+```
+# finding XY representatives for visualizing diff Z peaks
+
+> ab2 <- nngeo::st_segments(roofJordan, progress = FALSE)
+> ab2[,2] <- as.factor(1:nrow(ab2))
+> plot(ab2, col = ab2$V2)
+> plot(roofJordan)
+> plot(ab2[10:14, 1], col = "red", add = TRUE)
+> plot(ab2[70:84, 1], col = "red", add = TRUE)
+> plot(ab2[130:146, 1], col = "red", add = TRUE)
+> plot(ab2[130, 1], col = "green", add = TRUE)
+> st_centroid(ab2[130,1])
+> plot(st_centroid(ab2[130,1]), col = "red", add = TRUE)
+
+
+jdtm <- raster_to_matrix(jordan_dtm)
+
+plot_3d(hillshade = lamb_shade(jdtm), heightmap = jdtm)
+
+render_points(extent(lasJordan),
+              lat = unlist(lasJordan@data$Y),
+              long = unlist(lasJordan@data$X),
+              altitude = unlist(lasJordan@data$Z),
+              size = 8)
+
+render_points(extent(lasJordan), lat = 2943824, long = 346987, altitude = 225, size = 20, color = "red")
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+
+
